@@ -1,0 +1,5 @@
+
+SAMPLES_BIN=../inference-engine/bin/intel64/Debug
+SAMPLES_HOME=.
+SAMPLES_INPUT=$SAMPLES_HOME/input
+SAMPLES_MODEL=$SAMPLES_HOME/models
