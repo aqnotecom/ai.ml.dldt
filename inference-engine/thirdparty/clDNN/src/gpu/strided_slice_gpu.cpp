@@ -39,7 +39,7 @@ public:
     {
         auto strided_slice_params = get_default_params<kernel_selector::strided_slice_params>(arg);
         auto strided_slice_optional_params = get_default_optional_params<kernel_selector::strided_slice_optional_params>(arg.get_program());
-        const int32_t numberOfDims = 4;
+        const size_t numberOfDims = 4;
 
         auto complete_strided_slice_params = [&](std::vector<int32_t>& param) {
             for (size_t i = param.size(); i < numberOfDims; ++i)

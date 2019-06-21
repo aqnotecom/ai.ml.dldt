@@ -56,6 +56,42 @@ if [[ -f /etc/lsb-release ]]; then
     else
         sudo -E apt-get install -y libpng-dev
     fi
+elif [[ -f /etc/os-release && "$(lsb_release -i -s)" == "Debian" ]]; then
+    # Debian
+    sudo -E apt update
+    sudo -E apt-get install -y \
+            build-essential \
+            cmake \
+            curl \
+            wget \
+            libssl-dev \
+            ca-certificates \
+            git \
+            libboost-regex-dev \
+            # gcc-multilib \
+            # g++-multilib \
+            libgtk2.0-dev \
+            pkg-config \
+            unzip \
+            automake \
+            libtool \
+            autoconf \
+            libcairo2-dev \
+            libpango1.0-dev \
+            libglib2.0-dev \
+            libgtk2.0-dev \
+            libswscale-dev \
+            libavcodec-dev \
+            libavformat-dev \
+            libgstreamer1.0-0 \
+            gstreamer1.0-plugins-base \
+            libusb-1.0-0-dev \
+            libopenblas-dev
+    if apt-cache search --names-only '^libpng12'| grep -q libpng12; then
+        sudo -E apt-get install -y libpng12-dev
+    else
+        sudo -E apt-get install -y libpng-dev
+    fi
 elif [[ -f /etc/redhat-release ]]; then
     # CentOS 7.x
     sudo -E yum install -y centos-release-scl epel-release

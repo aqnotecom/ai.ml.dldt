@@ -23,14 +23,14 @@
 /// @param[in] a value to align to (must be power of 2)
 /// @returns the aligned value
 #if (defined(_WIN32) || defined(_WIN64) )
-#define ALIGN_UP_UINT32(x, a)   ((uint32_t)(((uint32_t)(x) + a - 1) & (~(a-1))))
-#define ALIGN_UP_INT32(x, a)   ((int32_t)(((uint32_t)(x) + a - 1) & (~(a-1))))
-#define ALIGN_UP(x, a) ALIGN_UP_UINT32(x,a)
+#   define ALIGN_UP_UINT32(x, a)   ((uint32_t)(((uint32_t)(x) + a - 1) & (~(a-1))))
+#   define ALIGN_UP_INT32(x, a)   ((int32_t)(((uint32_t)(x) + a - 1) & (~(a-1))))
+#   define ALIGN_UP(x, a) ALIGN_UP_UINT32(x,a)
 #else
-#define ALIGN_UP(x, a)   ((typeof(x))(((uint32_t)(x) + a - 1) & (~(a-1))))
-#define ALIGN_DOWN(x, a) ((typeof(x))(((uint32_t)(x)) & (~(a-1))) )
-#define ALIGN_UP_UINT32(_x, _a)   ALIGN_UP(_x, _a)
-#define ALIGN_UP_INT32(_x, _a)   ALIGN_UP(_x, _a)
+#   define ALIGN_UP(x, a) ((__typeof__(x))(((uint32_t)(x) + a - 1) & (~(a - 1))))
+#   define ALIGN_DOWN(x, a) ((__typeof__(x))(((uint32_t)(x)) & (~(a-1))) )
+#   define ALIGN_UP_UINT32(_x, _a)   ALIGN_UP(_x, _a)
+#   define ALIGN_UP_INT32(_x, _a)   ALIGN_UP(_x, _a)
 #endif
 /// @brief Aligns a integernumber to any value given
 /// @param[in] x integer number to be aligned
