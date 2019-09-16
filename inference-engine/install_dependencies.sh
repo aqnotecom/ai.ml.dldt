@@ -70,7 +70,7 @@ elif [[ -f /etc/os-release && "$(lsb_release -i -s)" == "Debian" ]]; then
             libboost-regex-dev \
             # gcc-multilib \
             # g++-multilib \
-            libgtk2.0-dev \
+            #libgtk2.0-dev \
             pkg-config \
             unzip \
             automake \
