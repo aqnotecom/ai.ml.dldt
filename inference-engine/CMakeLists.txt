@@ -61,7 +61,8 @@ if (UNIX)
     SET(LIB_DL ${CMAKE_DL_LIBS})
 endif()
 
-set (OUTPUT_ROOT ${IE_MAIN_SOURCE_DIR})
+#set (OUTPUT_ROOT ${IE_MAIN_SOURCE_DIR})
+set (OUTPUT_ROOT ${CMAKE_INSTALL_PREFIX})
 
 include(os_flags)
 
