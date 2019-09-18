@@ -13,7 +13,6 @@ cmake -G "Unix Makefiles" \
     -DENABLE_GNA=OFF \
     -DENABLE_SAMPLES=ON \
     -DCMAKE_INSTALL_PREFIX=/opt/aqnote/dldt \
-    -DCMAKE_BINARY_DIR=/opt/aqnote/dldt \
     -DENABLE_PYTHON=ON \
     -DPYTHON_EXECUTABLE=/opt/python/bin/python3 \
   	-DPYTHON_LIBRARY=/opt/python/lib/libpython3.7m.so \

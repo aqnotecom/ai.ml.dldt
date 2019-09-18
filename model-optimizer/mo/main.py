@@ -73,7 +73,8 @@ def print_argv(argv: argparse.Namespace, is_caffe: bool, is_tf: bool, is_mxnet: 
         lines.append(framework_specifics_map[key])
         for (op, desc) in props[key].items():
             if isinstance(desc, list):
-                lines.append('\t{}: \t{}'.format(desc[0], desc[1](getattr(argv, op, 'NONE'))))
+                lines.append('\t{}: \t{}'.format(
+                    desc[0], desc[1](getattr(argv, op, 'NONE'))))
             else:
                 if op is 'k':
                     default_path = os.path.join(os.path.dirname(sys.argv[0]),
@@ -81,7 +82,8 @@ def print_argv(argv: argparse.Namespace, is_caffe: bool, is_tf: bool, is_mxnet: 
                     if getattr(argv, op, 'NONE') == default_path:
                         lines.append('\t{}: \t{}'.format(desc, 'Default'))
                         continue
-                lines.append('\t{}: \t{}'.format(desc, getattr(argv, op, 'NONE')))
+                lines.append('\t{}: \t{}'.format(
+                    desc, getattr(argv, op, 'NONE')))
     lines.append('Model Optimizer version: \t{}'.format(get_version()))
     print('\n'.join(lines))
 
@@ -126,7 +128,8 @@ def driver(argv: argparse.Namespace):
         raise Error('Path to input model or input symbol or pretrained_model_name is required: use --input_model or '
                     '--input_symbol or --pretrained_model_name')
     elif is_caffe and not argv.input_model and not argv.input_proto:
-        raise Error('Path to input model or input proto is required: use --input_model or --input_proto')
+        raise Error(
+            'Path to input model or input proto is required: use --input_model or --input_proto')
     elif (is_kaldi or is_onnx) and not argv.input_model:
         raise Error('Path to input model is required: use --input_model.')
 
@@ -150,7 +153,8 @@ def driver(argv: argparse.Namespace):
     # if --input_proto is not provided, try to retrieve another one
     # by suffix substitution from model file name
     if is_caffe and not argv.input_proto:
-        argv.input_proto = replace_ext(argv.input_model, '.caffemodel', '.prototxt')
+        argv.input_proto = replace_ext(
+            argv.input_model, '.caffemodel', '.prototxt')
 
         if not argv.input_proto:
             raise Error("Cannot find prototxt file: for Caffe please specify --input_proto - a " +
@@ -160,7 +164,8 @@ def driver(argv: argparse.Namespace):
         log.info('Deduced name for prototxt: {}'.format(argv.input_proto))
 
     if not argv.silent:
-        print_argv(argv, is_caffe, is_tf, is_mxnet, is_kaldi, is_onnx, model_name)
+        print_argv(argv, is_caffe, is_tf, is_mxnet,
+                   is_kaldi, is_onnx, model_name)
 
     if not any([is_tf, is_caffe, is_mxnet, is_kaldi, is_onnx]):
         raise Error(
@@ -184,7 +189,8 @@ def driver(argv: argparse.Namespace):
                     refer_to_faq_msg(17))
     elif is_caffe and argv.mean_file and argv.mean_file_offsets:
 
-        values = get_tuple_values(argv.mean_file_offsets, t=int, num_exp_values=2)
+        values = get_tuple_values(
+            argv.mean_file_offsets, t=int, num_exp_values=2)
         mean_file_offsets = np.array([int(x) for x in values[0].split(',')])
         if not all([offset >= 0 for offset in mean_file_offsets]):
             raise Error("Negative value specified for --mean_file_offsets option. "
@@ -207,16 +213,19 @@ def driver(argv: argparse.Namespace):
     if is_tf:
         if argv.saved_model_tags is not None:
             if ' ' in argv.saved_model_tags:
-                raise Error('Incorrect saved model tag was provided. Specify --saved_model_tags with no spaces in it')
+                raise Error(
+                    'Incorrect saved model tag was provided. Specify --saved_model_tags with no spaces in it')
             argv.saved_model_tags = argv.saved_model_tags.split(',')
 
     argv.output = argv.output.split(',') if argv.output else None
 
-    argv.placeholder_shapes = get_placeholder_shapes(argv.input, argv.input_shape, argv.batch)
+    argv.placeholder_shapes = get_placeholder_shapes(
+        argv.input, argv.input_shape, argv.batch)
 
     mean_values = parse_tuple_pairs(argv.mean_values)
     scale_values = parse_tuple_pairs(argv.scale_values)
-    mean_scale = get_mean_scale_dictionary(mean_values, scale_values, argv.input)
+    mean_scale = get_mean_scale_dictionary(
+        mean_values, scale_values, argv.input)
     argv.mean_scale_values = mean_scale
 
     if not os.path.exists(argv.output_dir):
@@ -258,45 +267,54 @@ def driver(argv: argparse.Namespace):
     if is_tf:
         import mo.pipeline.tf as mo_tf
         from mo.front.tf.register_custom_ops import get_front_classes
-        import_extensions.load_dirs(argv.framework, extensions, get_front_classes)
-        ret_res = mo_tf.tf2nx(argv, argv.input_model, model_name, argv.output_dir,
-                              is_binary=not argv.input_model_is_text)
+        import_extensions.load_dirs(
+            argv.framework, extensions, get_front_classes)
+        ret_res = mo_tf.tf2nx(argv, argv.input_model, model_name,
+                              argv.output_dir, is_binary=not argv.input_model_is_text)
 
     elif is_caffe:
         import mo.pipeline.caffe as mo_caffe
         from mo.front.caffe.register_custom_ops import get_front_classes
-        import_extensions.load_dirs(argv.framework, extensions, get_front_classes)
-        ret_res = mo_caffe.driver(argv, argv.input_proto, argv.input_model, model_name, argv.output_dir,
-                                  mean_file=argv.mean_file,
-                                  mean_file_offsets=mean_file_offsets,
-                                  custom_layers_mapping_path=custom_layers_mapping_path)
+        import_extensions.load_dirs(
+            argv.framework, extensions, get_front_classes)
+        ret_res = mo_caffe.driver(argv, argv.input_proto, argv.input_model, model_name, argv.output_dir, mean_file=argv.mean_file,
+                                  mean_file_offsets=mean_file_offsets, custom_layers_mapping_path=custom_layers_mapping_path)
 
     elif is_mxnet:
         import mo.pipeline.mx as mo_mxnet
         from mo.front.mxnet.register_custom_ops import get_front_classes
-        import_extensions.load_dirs(argv.framework, extensions, get_front_classes)
-        ret_res = mo_mxnet.driver(argv, argv.input_model, model_name, argv.output_dir)
+        import_extensions.load_dirs(
+            argv.framework, extensions, get_front_classes)
+        ret_res = mo_mxnet.driver(
+            argv, argv.input_model, model_name, argv.output_dir)
 
     elif is_kaldi:
         import mo.pipeline.kaldi as mo_kaldi
         from mo.front.kaldi.register_custom_ops import get_front_classes
-        import_extensions.load_dirs(argv.framework, extensions, get_front_classes)
-        ret_res = mo_kaldi.driver(argv, argv.input_model, model_name, argv.output_dir)
+        import_extensions.load_dirs(
+            argv.framework, extensions, get_front_classes)
+        ret_res = mo_kaldi.driver(
+            argv, argv.input_model, model_name, argv.output_dir)
     elif is_onnx:
         import mo.pipeline.onnx as mo_onnx
         from mo.front.onnx.register_custom_ops import get_front_classes
-        import_extensions.load_dirs(argv.framework, extensions, get_front_classes)
-        ret_res = mo_onnx.driver(argv, argv.input_model, model_name, argv.output_dir)
+        import_extensions.load_dirs(
+            argv.framework, extensions, get_front_classes)
+        ret_res = mo_onnx.driver(
+            argv, argv.input_model, model_name, argv.output_dir)
 
     if ret_res != 0:
         return ret_res
     if not (is_tf and argv.tensorflow_custom_operations_config_update):
         output_dir = argv.output_dir if argv.output_dir != '.' else os.getcwd()
         print('\n[ SUCCESS ] Generated IR model.')
-        print('[ SUCCESS ] XML file: {}.xml'.format(os.path.join(output_dir, model_name)))
-        print('[ SUCCESS ] BIN file: {}.bin'.format(os.path.join(output_dir, model_name)))
+        print('[ SUCCESS ] XML file: {}.xml'.format(
+            os.path.join(output_dir, model_name)))
+        print('[ SUCCESS ] BIN file: {}.bin'.format(
+            os.path.join(output_dir, model_name)))
         elapsed_time = datetime.datetime.now() - start_time
-        print('[ SUCCESS ] Total execution time: {:.2f} seconds. '.format(elapsed_time.total_seconds()))
+        print('[ SUCCESS ] Total execution time: {:.2f} seconds. '.format(
+            elapsed_time.total_seconds()))
     return ret_res
 
 
@@ -311,7 +329,8 @@ def main(cli_parser: argparse.ArgumentParser, framework: str):
             argv.framework = framework
         return driver(argv)
     except (FileNotFoundError, NotADirectoryError) as e:
-        log.error('File {} was not found'.format(str(e).split('No such file or directory:')[1]))
+        log.error('File {} was not found'.format(
+            str(e).split('No such file or directory:')[1]))
         log.debug(traceback.format_exc())
     except Error as err:
         log.error(err)
@@ -323,7 +342,8 @@ def main(cli_parser: argparse.ArgumentParser, framework: str):
         log.error("-------------------------------------------------")
         log.error("----------------- INTERNAL ERROR ----------------")
         log.error("Unexpected exception happened.")
-        log.error("Please contact Model Optimizer developers and forward the following information:")
+        log.error(
+            "Please contact Model Optimizer developers and forward the following information:")
         log.error(str(err))
         log.error(traceback.format_exc())
         log.error("---------------- END OF BUG REPORT --------------")
