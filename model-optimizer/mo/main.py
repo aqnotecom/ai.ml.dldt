@@ -27,7 +27,8 @@ import numpy as np
 from mo.utils import import_extensions
 from mo.utils.cli_parser import get_placeholder_shapes, get_tuple_values, get_model_name, \
     get_common_cli_options, get_caffe_cli_options, get_tf_cli_options, get_mxnet_cli_options, get_kaldi_cli_options, \
-    get_onnx_cli_options, get_mean_scale_dictionary, parse_tuple_pairs
+    get_onnx_cli_options, get_mean_scale_dictionary, parse_tuple_pairs, get_freeze_placeholder_values, \
+    append_exp_keys_to_namespace
 from mo.utils.error import Error, FrameworkError
 from mo.utils.guess_framework import guess_framework_by_ext
 from mo.utils.logger import init_logger
@@ -248,21 +249,8 @@ def driver(argv: argparse.Namespace):
     else:
         extensions = None
 
-    if argv.freeze_placeholder_with_value is not None:
-        replacements = {}
-        for replace in argv.freeze_placeholder_with_value.split(','):
-            rp = replace.split('->')
-            if len(rp) != 2:
-                raise Error("Wrong replacement syntax. Use --freeze_placeholder_with_value "
-                            "\"node1_name->value1,node2_name->value2\"")
-            if rp[0] in replacements and replacements[rp[0]] != rp[1]:
-                raise Error("Overriding replacement value of placeholder with name '{}': old value = {}, new value = {}"
-                            ".".format(rp[0], replacements[rp[0]], rp[1]))
-            value = rp[1]
-            if '[' in value.strip(' '):
-                value = value.replace('[', '').replace(']', '').split(' ')
-            replacements[rp[0]] = value
-        argv.freeze_placeholder_with_value = replacements
+    argv.freeze_placeholder_with_value, argv.input = get_freeze_placeholder_values(argv.input,
+                                                                                   argv.freeze_placeholder_with_value)
 
     if is_tf:
         import mo.pipeline.tf as mo_tf
@@ -275,10 +263,12 @@ def driver(argv: argparse.Namespace):
     elif is_caffe:
         import mo.pipeline.caffe as mo_caffe
         from mo.front.caffe.register_custom_ops import get_front_classes
-        import_extensions.load_dirs(
-            argv.framework, extensions, get_front_classes)
-        ret_res = mo_caffe.driver(argv, argv.input_proto, argv.input_model, model_name, argv.output_dir, mean_file=argv.mean_file,
-                                  mean_file_offsets=mean_file_offsets, custom_layers_mapping_path=custom_layers_mapping_path)
+        import_extensions.load_dirs(argv.framework, extensions, get_front_classes)
+        ret_res = mo_caffe.driver(argv, argv.input_proto, argv.input_model, model_name, argv.output_dir,
+                                  argv.caffe_parser_path,
+                                  mean_file=argv.mean_file,
+                                  mean_file_offsets=mean_file_offsets,
+                                  custom_layers_mapping_path=custom_layers_mapping_path)
 
     elif is_mxnet:
         import mo.pipeline.mx as mo_mxnet
@@ -327,6 +317,7 @@ def main(cli_parser: argparse.ArgumentParser, framework: str):
         argv = cli_parser.parse_args()
         if framework:
             argv.framework = framework
+        append_exp_keys_to_namespace(argv)
         return driver(argv)
     except (FileNotFoundError, NotADirectoryError) as e:
         log.error('File {} was not found'.format(
