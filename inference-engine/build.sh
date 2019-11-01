@@ -12,11 +12,12 @@ cmake -G "Unix Makefiles" \
     -DENABLE_SSE42=OFF \
     -DENABLE_GNA=OFF \
     -DENABLE_SAMPLES=ON \
-    -DCMAKE_INSTALL_PREFIX=/opt/aqnote/dldt \
+    -DCMAKE_INSTALL_PREFIX=/opt/aqnote/install/dldt/2019 \
     -DENABLE_PYTHON=ON \
-    -DPYTHON_EXECUTABLE=/opt/python/bin/python3 \
-  	-DPYTHON_LIBRARY=/opt/python/lib/libpython3.7m.so \
-    -DPYTHON_INCLUDE_DIR=/opt/python/include/python3.7m \
+    
+    #-DPYTHON_EXECUTABLE=/opt/aqnote/python/bin/python3 \
+  	#-DPYTHON_LIBRARY=/opt/aqnote/python/lib/libpython3.7m.so \
+    #-DPYTHON_INCLUDE_DIR=/opt/aqnote/python/include/python3.7m \
     ..
 popd
 
