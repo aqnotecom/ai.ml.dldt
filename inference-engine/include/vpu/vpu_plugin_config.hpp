@@ -15,6 +15,7 @@
 
 #include "ie_plugin_config.hpp"
 #include "myriad_plugin_config.hpp"
+#include "hddl_plugin_config.hpp"
 #include "ie_api.h"
 
 //
@@ -36,6 +37,9 @@
 
 namespace InferenceEngine {
 
+/**
+ * @brief VPU plugin configuration
+ */
 namespace VPUConfigParams {
 
 //
@@ -105,6 +109,8 @@ DECLARE_VPU_CONFIG_KEY(COMPUTE_LAYOUT);
 DECLARE_VPU_CONFIG_VALUE(AUTO);
 DECLARE_VPU_CONFIG_VALUE(NCHW);
 DECLARE_VPU_CONFIG_VALUE(NHWC);
+DECLARE_VPU_CONFIG_VALUE(NCDHW);
+DECLARE_VPU_CONFIG_VALUE(NDHWC);
 
 /**
  * @brief This option allows to pass custom layers binding xml.

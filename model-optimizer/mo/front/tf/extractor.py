@@ -73,6 +73,7 @@ tf_op_extractors = {
     'ConcatV2': node_pb_arg(tf_concat_ext),
     'MatMul': node_pb_arg(tf_matmul_ext),
     'BatchMatMul': node_pb_arg(tf_batchmatmul_ext),
+    'BatchMatMulV2': node_pb_arg(tf_batchmatmul_ext),
     'Pack': node_pb_arg(tf_pack_ext),
     'Unpack': node_pb_arg(tf_unpack_ext),
     'Const': node_pb_arg(tf_const_ext),
@@ -81,7 +82,6 @@ tf_op_extractors = {
     'SpaceToBatchND': node_pb_arg(tf_space_to_batch_ext),
     'BatchToSpaceND': node_pb_arg(tf_batch_to_space_ext),
     'ReadVariableOp': node_pb_arg(make_tf_eltwise(lambda v: v, attrs={'identity': True})),
-    'PlaceholderWithDefault': node_pb_arg(make_tf_eltwise(lambda v: v, attrs={'identity': True}))
 }
 
 

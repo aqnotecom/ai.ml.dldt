@@ -17,6 +17,9 @@
 
 namespace InferenceEngine {
 
+/**
+ * @brief %Metrics
+ */
 namespace Metrics {
 
 #ifndef DECLARE_METRIC_KEY_IMPL
@@ -24,10 +27,15 @@ namespace Metrics {
 #endif
 
 /**
-* @brief shortcut for defining common Inference Engine metrics
-*/
-
+ * @def METRIC_KEY(name)
+ * @brief shortcut for defining common Inference Engine metrics
+ */
 #define METRIC_KEY(name) InferenceEngine::Metrics::METRIC_##name
+
+/**
+ * @def EXEC_NETWORK_METRIC_KEY(name)
+ * @brief shortcut for defining common Inference Engine ExecutableNetwork metrics
+ */
 #define EXEC_NETWORK_METRIC_KEY(name) METRIC_KEY(name)
 
 #define DECLARE_METRIC_KEY(name, ...)               \
@@ -37,8 +45,9 @@ namespace Metrics {
 #define DECLARE_EXEC_NETWORK_METRIC_KEY(name, ...) DECLARE_METRIC_KEY(name, __VA_ARGS__)
 
 /**
-* @brief shortcut for defining metric values
-*/
+ * @def METRIC_VALUE(name)
+ * @brief shortcut for defining metric values
+ */
 #define METRIC_VALUE(name) InferenceEngine::Metrics::name
 #define DECLARE_METRIC_VALUE(name) static constexpr auto name = #name
 
@@ -138,18 +147,23 @@ DECLARE_EXEC_NETWORK_METRIC_KEY(OPTIMAL_NUMBER_OF_INFER_REQUESTS, unsigned int);
 
 }  // namespace Metrics
 
+/**
+ * @brief Generic plugin configuration
+ */
 namespace PluginConfigParams {
 
 /**
-* @brief shortcut for defining configuration keys
-*/
+ * @def CONFIG_KEY(name)
+ * @brief shortcut for defining configuration keys
+ */
 #define CONFIG_KEY(name) InferenceEngine::PluginConfigParams::_CONFIG_KEY(name)
 #define _CONFIG_KEY(name) KEY_##name
 #define DECLARE_CONFIG_KEY(name) static constexpr auto _CONFIG_KEY(name) = #name
 
 /**
-* @brief shortcut for defining configuration values
-*/
+ * @def CONFIG_VALUE(name)
+ * @brief shortcut for defining configuration values
+ */
 #define CONFIG_VALUE(name) InferenceEngine::PluginConfigParams::name
 #define DECLARE_CONFIG_VALUE(name) static constexpr auto name = #name
 
