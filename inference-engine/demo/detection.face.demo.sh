@@ -8,7 +8,7 @@ network_fp16=$SAMPLES_MODEL/ssd_inception_v2_coco_2018_01_28/ir/tensorflow/FP16/
 
 ${ssd_bin} -i $SAMPLES_INPUT/girl.png -m ${network_fp32} -d CPU
 
-echo "================"
-${ssd_bin} -i $SAMPLES_INPUT/girl.png -m ${network_fp16} -d MYRIAD
+#echo "================"
+#${ssd_bin} -i $SAMPLES_INPUT/girl.png -m ${network_fp16} -d MYRIAD
 
 exit 0

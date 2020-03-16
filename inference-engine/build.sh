@@ -13,7 +13,7 @@ cmake -G "Unix Makefiles" \
     -DENABLE_GNA=OFF \
     -DENABLE_SAMPLES=ON \
     -DCMAKE_INSTALL_PREFIX=/opt/aqnote/install/dldt/2019 \
-    -DENABLE_PYTHON=ON \
+    -DENABLE_PYTHON=OFF \
     -DPYTHON_EXECUTABLE=/opt/aqnote/python/bin/python3 \
   	-DPYTHON_LIBRARY=/opt/aqnote/python/lib/libpython3.7m.so \
     -DPYTHON_INCLUDE_DIR=/opt/aqnote/python/include/python3.7m \
