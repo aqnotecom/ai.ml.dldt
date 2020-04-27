@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2019 Intel Corporation
+// Copyright (C) 2018-2020 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -32,21 +32,25 @@ static TopKSort getSort(const std::shared_ptr<ie::TopKLayer> layer) {
 namespace {
 
 class TopKStage final : public StageNode {
+public:
+    using StageNode::StageNode;
+
 private:
     StagePtr cloneImpl() const override {
         return std::make_shared<TopKStage>(*this);
     }
 
     void propagateDataOrderImpl(StageDataInfo<DimsOrder>& orderInfo) override {
-        IE_ASSERT(_inputEdges.size() == 2);
-        IE_ASSERT(_outputEdges.size() == 2);
-
-        auto inputValues = _inputEdges[0]->input();
+        auto inputValues = input(0);
 
         auto outputOrder = inputValues->desc().dimsOrder();
 
-        orderInfo.setOutput(_outputEdges[0], outputOrder);
-        orderInfo.setOutput(_outputEdges[1], outputOrder);
+        const auto outs = attrs().get<TopKOutputs>("outputs");
+
+        orderInfo.setOutput(outputEdge(0), outputOrder);
+
+        if (outs == TopKOutputs::All)
+            orderInfo.setOutput(outputEdge(1), outputOrder);
     }
 
     void getDataStridesRequirementsImpl(StageDataInfo<StridesRequirement>& /*stridesInfo*/) override {
@@ -63,50 +67,60 @@ private:
     }
 
     void initialCheckImpl() const override {
+        const auto outs = attrs().get<TopKOutputs>("outputs");
+
+        const DataTypesRequirement expectedOutputsTypes =
+                outs == TopKOutputs::All        ? DataTypesRequirement{{DataType::FP16}, {DataType::S32}} :
+                outs == TopKOutputs::ValueOnly  ? DataTypesRequirement{{DataType::FP16}}                  :
+                outs == TopKOutputs::IndexOnly  ? DataTypesRequirement{{DataType::S32}}                   : DataTypesRequirement{};
+
         assertInputsOutputsTypes(this,
             {{DataType::FP16}, {DataType::S32}},
-            {{DataType::FP16}, {DataType::S32}});
+            expectedOutputsTypes);
     }
 
     void serializeParamsImpl(BlobSerializer& serializer) const override {
-        IE_ASSERT(_inputEdges.size() == 2);
+        const auto inputValues = input(0);
 
-        auto inputValues = _inputEdges[0]->input();
+        const auto axis = attrs().get<Dim>("axis");
+        const auto axisInd = inputValues->desc().dimsOrder().dimInd(axis);
 
-        auto axis = attrs().get<Dim>("axis");
-        auto axisInd = inputValues->desc().dimsOrder().dimInd(axis);
+        const auto mode = attrs().get<TopKMode>("mode");
+        const auto sort = attrs().get<TopKSort>("sort");
+        const auto outs = attrs().get<TopKOutputs>("outputs");
 
-        auto mode = attrs().get<TopKMode>("mode");
-        auto sort = attrs().get<TopKSort>("sort");
+        // @note: int32_t instead of bool because firmware require overall alignment of parameters
+        const int32_t valuesPresent  = (outs == TopKOutputs::All || outs == TopKOutputs::ValueOnly);
+        const int32_t indicesPresent = (outs == TopKOutputs::All || outs == TopKOutputs::IndexOnly);
 
         serializer.append(static_cast<int32_t>(axisInd));
         serializer.append(static_cast<int32_t>(mode));
         serializer.append(static_cast<int32_t>(sort));
+
+        serializer.append(valuesPresent);
+        serializer.append(indicesPresent);
     }
 
     void serializeDataImpl(BlobSerializer& serializer) const override {
-        IE_ASSERT(_inputEdges.size() == 2);
-        IE_ASSERT(_outputEdges.size() == 2);
+        auto inputValues = input(0);
+        auto inputK = input(1);
 
-        auto inputValues = _inputEdges[0]->input();
-        auto inputK = _inputEdges[1]->input();
-        auto outputValues = _outputEdges[0]->output();
-        auto outputIndices = _outputEdges[1]->output();
+        inputValues->serializeBuffer(serializer);
+        inputK->serializeBuffer(serializer);
 
-        inputValues->serializeNewBuffer(serializer);
-        outputValues->serializeNewBuffer(serializer);
-        inputK->serializeNewBuffer(serializer);
-        outputIndices->serializeNewBuffer(serializer);
+        const auto outs = attrs().get<TopKOutputs>("outputs");
+
+        if (outs == TopKOutputs::All || outs == TopKOutputs::ValueOnly)
+            output(0)->serializeBuffer(serializer);
+
+        if (outs == TopKOutputs::All || outs == TopKOutputs::IndexOnly)
+            output(outs == TopKOutputs::IndexOnly ? 0 : 1)->serializeBuffer(serializer);
     }
 };
 
 }  // namespace
 
-void FrontEnd::parseTopK(
-        const Model::Ptr& model,
-        const ie::CNNLayerPtr& _layer,
-        const DataVector& inputs,
-        const DataVector& outputs) {
+void FrontEnd::parseTopK(const Model& model, const ie::CNNLayerPtr& _layer, const DataVector& inputs, const DataVector& outputs) const {
     auto layer = std::dynamic_pointer_cast<ie::TopKLayer>(_layer);
     IE_ASSERT(layer != nullptr);
 
@@ -121,27 +135,40 @@ void FrontEnd::parseTopK(
     const auto numDims = inputValues->desc().numDims();
 
     IE_ASSERT(inputK->desc().numDims() == 1);
-    IE_ASSERT(outputValues->desc().numDims() == numDims);
-    IE_ASSERT(outputIndices->desc().numDims() == numDims);
+    IE_ASSERT(outputValues || outputIndices);
+    IE_ASSERT(!outputValues || outputValues->desc().numDims() == numDims);
+    IE_ASSERT(!outputIndices || outputIndices->desc().numDims() == numDims);
 
     IE_ASSERT(layer->axis < numDims);
 
     auto perm = DimsOrder::fromNumDims(numDims).toPermutation();
     auto axis = perm[numDims - 1 - layer->axis];
 
-    TopKMode mode = getMode(layer);
-    TopKSort sort = getSort(layer);
+    const TopKMode mode = getMode(layer);
+    const TopKSort sort = getSort(layer);
+    TopKOutputs outputsMode = TopKOutputs::All;
+    DataVector realOutputs = outputs;
+    if (!outputValues) {
+        outputsMode = TopKOutputs::IndexOnly;
+        realOutputs = {outputIndices};
+    }
+    if (!outputIndices) {
+        outputsMode = TopKOutputs::ValueOnly;
+        realOutputs = {outputValues};
+    }
 
-    auto stage = model->addNewStage<TopKStage>(
-        layer->name,
-        StageType::TopK,
-        layer,
-        inputs,
-        outputs);
+    const bool isArgMaxPossible = outputsMode != TopKOutputs::All && mode == TopKMode::Max
+               && ((sort == TopKSort::Value && outputsMode == TopKOutputs::ValueOnly)
+                || (sort == TopKSort::Index && outputsMode == TopKOutputs::IndexOnly));
+
+    auto stage = model->addNewStage<TopKStage>(layer->name,
+                                               isArgMaxPossible ? StageType::ArgMax : StageType::TopK,
+                                               layer, inputs, realOutputs);
 
     stage->attrs().set<Dim>("axis", axis);
     stage->attrs().set<TopKMode>("mode", mode);
     stage->attrs().set<TopKSort>("sort", sort);
+    stage->attrs().set<TopKOutputs>("outputs", outputsMode);
 }
 
 }  // namespace vpu

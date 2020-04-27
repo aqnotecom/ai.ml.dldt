@@ -18,7 +18,10 @@
 #pragma once
 #include "api/quantize.hpp"
 #include "primitive_inst.h"
+#include "data_inst.h"
+#include "kernel_selector/core/actual_kernels/quantize/quantize_kernel_params.h"
 #include <string>
+#include <memory>
 
 namespace cldnn {
 
@@ -31,13 +34,64 @@ public:
 
     program_node& input(size_t index = 0) const { return get_dependency(index); }
     size_t inputs_count() const { return get_dependencies().size(); }
-    void set_output_data_type(data_types dt) { out_dt = dt; dt_changed = true; }
-    data_types get_output_data_type() const { return out_dt; }
-    bool has_custom_out_dt() const { return dt_changed; }
+    bool get_scale_shift_opt() const { return scale_shift_opt; }
+    void set_scale_shift_opt() { scale_shift_opt = true; }
+    void set_need_post_scale() { need_post_scale = true; }
+    void set_need_post_shift() { need_post_shift = true; }
+    void set_need_pre_shift() { need_pre_shift = true; }
+    void set_per_tensor_input_scale() { per_tensor_input_scale = true; }
+    void set_per_tensor_input_shift() { per_tensor_input_shift = true; }
+    void set_per_tensor_input_range() { per_tensor_input_range = true; }
+    void set_per_tensor_output_scale() { per_tensor_output_scale = true; }
+    void set_per_tensor_output_shift() { per_tensor_output_shift = true; }
+    // Clamp is needed to avoid inf and -inf which are converted to undefined "inf" constant in opencl
+    void set_input_scale_val(float val) { in_scale = clamp(val); }
+    void set_input_shift_val(float val) { in_shift = clamp(val); }
+    void set_input_lo_val(float val) { in_lo = clamp(val); }
+    void set_input_hi_val(float val) { in_hi = clamp(val); }
+    void set_output_scale_val(float val) { out_scale = clamp(val); }
+    void set_output_shift_val(float val) { out_shift = clamp(val); }
+
+    std::shared_ptr<kernel_selector::fuse_params> get_fuse_params() const override {
+        return std::make_shared<kernel_selector::quantize_fuse_params>(scale_shift_opt,
+                                                                       need_post_scale,
+                                                                       need_post_shift,
+                                                                       need_pre_shift,
+                                                                       per_tensor_input_range,
+                                                                       per_tensor_input_scale,
+                                                                       per_tensor_input_shift,
+                                                                       per_tensor_output_scale,
+                                                                       per_tensor_output_shift,
+                                                                       in_lo,
+                                                                       in_hi,
+                                                                       in_scale,
+                                                                       in_shift,
+                                                                       out_scale,
+                                                                       out_shift);
+    }
 
 private:
-    data_types out_dt;
-    bool dt_changed = false;
+    inline float clamp(float val) const {
+        return std::max(std::numeric_limits<float>::lowest(), std::min(std::numeric_limits<float>::max(), val));
+    }
+
+    bool scale_shift_opt = false;
+    bool need_post_scale = false;
+    bool need_post_shift = false;
+    bool need_pre_shift = false;
+
+    bool per_tensor_input_range = false;
+    bool per_tensor_input_scale = false;
+    bool per_tensor_input_shift = false;
+    bool per_tensor_output_scale = false;
+    bool per_tensor_output_shift = false;
+
+    float in_lo = 0.0f;
+    float in_hi = 0.0f;
+    float in_scale = 0.0f;
+    float in_shift = 0.0f;
+    float out_scale = 0.0f;
+    float out_shift = 0.0f;
 };
 
 using quantize_node = typed_program_node<quantize>;

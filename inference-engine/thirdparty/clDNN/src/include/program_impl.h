@@ -48,6 +48,7 @@ struct program_impl : public refcounted_obj<program_impl> {
     friend class graph_initializations;      // to be removed when possible
     friend class prepare_padding;            // to be removed when possible
     friend class propagate_constants;        // to be removed when possible
+    friend class pre_replace_deconv;         // to be removed when possible
     friend class prepare_primitive_fusing;   // to be removed when possible
     friend class prepare_quantization;       // to be removed when possible
     friend class prepare_conv_eltw_fusing;   // to be removed when possible
@@ -154,6 +155,7 @@ public:
     bool is_debug_build() const { return options.get<build_option_type::debug>()->enabled(); }
     const nodes_ordering& get_processing_order() const;
     nodes_ordering& get_processing_order();
+    uint32_t get_prog_id() { return prog_id; }
     const std::list<primitive_id>& get_optimized_out() const { return optimized_out; }
     bool has_node(const primitive_id& prim) const { return nodes_map.count(prim) > 0; }
     program_node& get_node(primitive_id const& id);
@@ -215,10 +217,10 @@ public:
     const graph_optimizer_info& get_optimizer_passes_info() const;
     void save_pass_info(std::string pass_name);
 
-    void add_optimized_primitive_info(primitive_id optimized_primitive_id,
-                                      std::vector<primitive_id> replaced_with_ids = {}) {
-        optimized.emplace_back(optimized_primitive_id, replaced_with_ids);
-    }
+    void add_optimized_primitive_info(primitive_id optimized_primitive_id, std::vector<primitive_id> replaced_with_ids = {});
+
+    void reset_program();
+    uint32_t get_id() const { return prog_id; }
 
 private:
     uint32_t prog_id = 0;
@@ -265,6 +267,7 @@ private:
     void pre_optimize_graph(bool is_internal);
     void post_optimize_graph(bool is_internal);
     void cleanup();
+    void transfer_memory_to_device();
 
     /*
     ** Analysis functions
@@ -281,9 +284,6 @@ private:
     ** Memory pool functions
     */
     void prepare_memory_dependencies();
-    void basic_memory_dependencies();
-    void skipped_branch_memory_dependencies();
-    void oooq_memory_dependencies();
     std::string get_memory_dependencies_string() const;
 
     /*

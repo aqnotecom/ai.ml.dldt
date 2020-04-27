@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2019 Intel Corporation
+// Copyright (C) 2018-2020 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -27,12 +27,12 @@ namespace vpu {
 
 namespace {
 
-const StorageOrder64 ORDER_MASK = static_cast<StorageOrder64>(-1ull) >> (std::numeric_limits<StorageOrder64>::digits / 4 - MAX_DIMS_64);
+const StorageOrder64 ORDER_MASK = std::numeric_limits<StorageOrder64>::max() >> (std::numeric_limits<StorageOrder64>::digits / 4 - MAX_DIMS_64);
 
 }  // namespace
 
 StorageOrder64 maskOrder(StorageOrder64 fullOrder, int size) {
-    StorageOrder64 mask = ~ORDER_MASK | ~(static_cast<StorageOrder64>(-1ull) << (size * 4));
+    StorageOrder64 mask = ~ORDER_MASK | ~(std::numeric_limits<StorageOrder64>::max() << (size * 4));
     return fullOrder & mask;
 }
 
@@ -107,7 +107,7 @@ DimsOrder DimsOrder::fromNumDims(int numDims) {
     static const StorageOrder64 FULL_ORDER_DEFAULT =
             maskOrder(static_cast<StorageOrder64>(0x0fedcba987654321ull), MAX_DIMS_64);
 
-    if (numDims == 1) {
+    if (numDims == 0 || numDims == 1) {
         return DimsOrder::C;
     } else if (numDims == 2) {
         return DimsOrder::NC;
@@ -134,13 +134,13 @@ DimsOrder DimsOrder::fromPermutation(const DimVector& perm) {
 
 DimsOrder DimsOrder::fromLayout(ie::Layout const& layout) {
     switch (layout) {
-    case ie::Layout::C     : return DimsOrder::C;
-    case ie::Layout::NC    : return DimsOrder::NC;
-    case ie::Layout::CHW   : return DimsOrder::CHW;
-    case ie::Layout::NCHW  : return DimsOrder::NCHW;
-    case ie::Layout::NHWC  : return DimsOrder::NHWC;
-    case ie::Layout::NCDHW : return DimsOrder::NCDHW;
-    case ie::Layout::NDHWC : return DimsOrder::NDHWC;
+    case ie::Layout::C : case ie::Layout::SCALAR : return DimsOrder::C;
+    case ie::Layout::NC                          : return DimsOrder::NC;
+    case ie::Layout::CHW                         : return DimsOrder::CHW;
+    case ie::Layout::NCHW                        : return DimsOrder::NCHW;
+    case ie::Layout::NHWC                        : return DimsOrder::NHWC;
+    case ie::Layout::NCDHW                       : return DimsOrder::NCDHW;
+    case ie::Layout::NDHWC                       : return DimsOrder::NDHWC;
     default:
         VPU_THROW_EXCEPTION << "Unsupported layout " << layout;
     }
@@ -204,8 +204,8 @@ int DimsOrder::dimInd(Dim d) const {
     VPU_THROW_EXCEPTION << "Dim " << d << " is not avaialble in layout " << toString(*this);
 }
 
-SmallVector<Dim, MAX_DIMS_64> DimsOrder::toPermutation() const {
-    SmallVector<Dim, MAX_DIMS_64> out;
+DimVector DimsOrder::toPermutation() const {
+    DimVector out;
 
     auto code = _code;
 
@@ -310,6 +310,10 @@ void printTo(std::ostream& os, DimsOrder order) {
         }
     }
 }
+std::ostream& operator<<(std::ostream& stream, const DimsOrder& object) {
+    printTo(stream, object);
+    return stream;
+}
 
 //
 // Dim
@@ -327,30 +331,24 @@ int dimToIeInd(vpu::Dim const& dim, int numDims) {
 //
 
 DataDesc::DataDesc(const ie::TensorDesc& ieDesc) {
-    //
-    // Parse precision
-    //
-
     _type = fromIEPrecision(ieDesc.getPrecision());
 
-    //
-    // Parse dimensions and layout
-    //
+    const auto& ieDims = ieDesc.getDims().empty() ? ie::SizeVector{1} : ieDesc.getDims();
 
-    const auto& ieDims = ieDesc.getDims();
-    IE_ASSERT(!ieDims.empty());
+    const auto layout = ieDesc.getLayout();
+    _dimsOrder = ieDims.size() > 5 ?
+        DimsOrder::fromNumDims(ieDesc.getDims().size()) :
+        DimsOrder::fromLayout(layout);
 
-    _dimsOrder = DimsOrder::fromNumDims(ieDims.size());
-
-    auto perm = _dimsOrder.toPermutation();
-
-    for (int i = 0; i < perm.size(); ++i) {
+    // IE dims are always in ChannelMajor Layout, so we need to use fromNumDims() layout to perform permutation.
+    const auto perm = DimsOrder::fromNumDims(ieDims.size()).toPermutation();
+    for (size_t i = 0; i < perm.size(); ++i) {
         _dims.set(perm[i], ieDims[ieDims.size() - 1 - i]);
     }
 }
 
 DataDesc::DataDesc(DataType type, DimsOrder dimsOrder, const DimValues& dims) :
-        _type(type), _dimsOrder(dimsOrder), _dims(dims) {
+        _type(type), _dimsOrder(dimsOrder), _dims(dims.empty() ? DimValues{{Dim::C, 1}} : dims) {
     IE_ASSERT(_dimsOrder.numDims() == _dims.size());
     for (const auto& p : _dims) {
         IE_ASSERT(_dimsOrder.hasDim(p.first));
@@ -469,6 +467,11 @@ void printTo(std::ostream& os, const DataDesc& desc) {
     os << "]";
 }
 
+std::ostream& operator<<(std::ostream& stream, const DataDesc& object) {
+    stream << "[" << object.type() << " " << object.dimsOrder() << " {" << object.dims() << "}]";
+    return stream;
+}
+
 void printTo(DotLabel& lbl, const DataDesc& desc) {
     DotLabel subLbl(lbl);
     subLbl.appendPair("type", desc.type());
@@ -551,7 +554,7 @@ int applyStrideRequirement(int origStride, int index, const StridesRequirement& 
     if (req == DimStride::Any || req == DimStride::Compact) {
         return origStride;
     } else if (req == DimStride::Aligned) {
-        return alignVal(origStride, STRIDE_ALIGNMENT);
+        return alignVal(origStride, HW_STRIDE_ALIGNMENT);
     } else {
         VPU_THROW_EXCEPTION << "Unknown stride requirement : " << req;
     }
@@ -606,7 +609,7 @@ bool checkStride(
             }
         }
     } else if (req == DimStride::Aligned) {
-        if (strideVal % STRIDE_ALIGNMENT != 0) {
+        if (strideVal % HW_STRIDE_ALIGNMENT != 0) {
             return false;
         }
     } else if (req == DimStride::Fixed) {
@@ -650,6 +653,48 @@ DataType fromIEPrecision(const InferenceEngine::Precision& precision) {
         case InferenceEngine::Precision::FP32: return DataType::FP32;
         default: VPU_THROW_EXCEPTION << precision << " isn't supported";
     }
+}
+
+PermutationIndexVector permuteMapToVector(const PermutationDimsMap& permutation, DimsOrder inputOrder, DimsOrder outputOrder) {
+    PermutationIndexVector result;
+    for (const auto dstDim : outputOrder.toPermutation()) {
+        const auto srcDim = permutation[dstDim];
+        const auto srcDimInd = inputOrder.dimInd(srcDim);
+        result.push_back(srcDimInd);
+    }
+    return result;
+}
+
+PermutationDimsMap permuteVectorToMap(const PermutationIndexVector& permutation, DimsOrder inputOrder, DimsOrder outputOrder) {
+    PermutationDimsMap result;
+    const auto inputPermuteDims  = inputOrder.toPermutation();
+    const auto outputPermuteDims = outputOrder.toPermutation();
+    for (size_t dstIndex = 0; dstIndex < permutation.size(); ++dstIndex) {
+        const int srcIndex = permutation[dstIndex];
+        const auto dstDim = outputPermuteDims[dstIndex];
+        const auto srcDim = inputPermuteDims[srcIndex];
+        result.set(dstDim, srcDim);
+    }
+    return result;
+}
+
+PermutationIndexVector combinePermutationVectors(const PermutationIndexVector& first, const PermutationIndexVector& second) {
+    PermutationIndexVector result;
+    for (const int secondIndexSrc : second) {
+        const int firstIndexSrc = first[secondIndexSrc];
+        result.push_back(firstIndexSrc);
+    }
+    return result;
+}
+
+PermutationIndexVector calculatePermuteForReorder(DimsOrder oldLayout, DimsOrder newLayout) {
+    auto newPermutation = newLayout.toPermutation();
+    auto oldIndices     = oldLayout.toIndices();
+    PermutationIndexVector result;
+    for (const Dim newDim : newPermutation) {
+        result.push_back(oldIndices[newDim]);
+    }
+    return result;
 }
 
 }  // namespace vpu

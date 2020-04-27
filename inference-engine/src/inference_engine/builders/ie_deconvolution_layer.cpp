@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2019 Intel Corporation
+// Copyright (C) 2018-2020 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -99,7 +99,7 @@ REG_VALIDATOR_FOR(Deconvolution, [] (const InferenceEngine::Builder::Layer::CPtr
 
     size_t weight_size = deconvBuilder.getOutDepth() * IC / deconvBuilder.getGroup();
     for (size_t kernel_dim : l_kernel) {
-        if (static_cast<double>(weight_size) * kernel_dim > std::numeric_limits<size_t>::max()) {
+        if (weight_size > std::numeric_limits<size_t>::max() / kernel_dim) {
             THROW_IE_EXCEPTION << "Weight size exceeds the size_t max";
         }
         weight_size *= kernel_dim;

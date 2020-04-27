@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2019 Intel Corporation
+// Copyright (C) 2018-2020 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -12,7 +12,6 @@
 #include "ie_plugin.hpp"
 #include "cpp/ie_cnn_network.h"
 #include "debug_options.h"
-#include "inference_engine.hpp"
 
 #include "cldnn_custom_layer.h"
 
@@ -27,14 +26,16 @@ struct Config {
                exclusiveAsyncRequests(false),
                memory_pool_on(true),
                enableDynamicBatch(false),
-               enableInt8(false),
+               enableInt8(true),
+               nv12_two_inputs(false),
                queuePriority(cldnn::priority_mode_types::disabled),
                queueThrottle(cldnn::throttle_mode_types::disabled),
                max_dynamic_batch(1),
                customLayers({}),
                tuningConfig(),
                graph_dumps_dir(""),
-               sources_dumps_dir("") {
+               sources_dumps_dir(""),
+               device_id("") {
         adjustKeyMapValues();
     }
 
@@ -48,6 +49,7 @@ struct Config {
     bool memory_pool_on;
     bool enableDynamicBatch;
     bool enableInt8;
+    bool nv12_two_inputs;
     cldnn::priority_mode_types queuePriority;
     cldnn::throttle_mode_types queueThrottle;
     int max_dynamic_batch;
@@ -55,6 +57,7 @@ struct Config {
     cldnn::tuning_config_options tuningConfig;
     std::string graph_dumps_dir;
     std::string sources_dumps_dir;
+    std::string device_id;
 
     std::map<std::string, std::string> key_config_map;
 };

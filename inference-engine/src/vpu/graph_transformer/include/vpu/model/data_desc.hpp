@@ -1,9 +1,10 @@
-// Copyright (C) 2018-2019 Intel Corporation
+// Copyright (C) 2018-2020 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
 #pragma once
 
+#include <iterator>
 #include <vector>
 #include <unordered_map>
 #include <unordered_set>
@@ -19,6 +20,7 @@
 #include <vpu/utils/io.hpp>
 #include <vpu/utils/dot_io.hpp>
 #include <vpu/utils/checked_cast.hpp>
+#include <vpu/utils/error.hpp>
 
 //
 // Description (type, layout, dimensions, strides) for Data objects inside the VPU Model.
@@ -89,6 +91,7 @@ VPU_DECLARE_ENUM(Dim,
 int dimToIeInd(vpu::Dim const& dim, int numDims);
 
 using DimVector = SmallVector<Dim, MAX_DIMS_64>;
+using DimSet = std::unordered_set<Dim, EnumClassHash>;
 
 //
 // DimValues
@@ -216,7 +219,7 @@ public:
     DimValues_() {
         _flags.fill(false);
     }
-    explicit DimValues_(std::initializer_list<value_type> data) {
+    DimValues_(std::initializer_list<value_type> data) {
         _flags.fill(false);
 
         for (const auto& p : data) {
@@ -330,10 +333,19 @@ public:
         }
         return false;
     }
+    bool operator<(const DimValues_& other) const {
+        for (int ind = 0; ind < MAX_DIMS_64; ++ind) {
+            if (_flags[ind] != other._flags[ind]) {
+                return !_flags[ind];
+            }
+            if (_flags[ind] && _values[ind].second < other._values[ind].second) {
+                return true;
+            }
+        }
+        return false;
+    }
 
-    void printTo(std::ostream& os) const {
-        os << "[";
-
+    void printImpl(std::ostream& os) const {
         int realInd = 0;
         for (int ind = 0; ind < MAX_DIMS_64; ++ind) {
             if (_flags[ind]) {
@@ -346,8 +358,6 @@ public:
                 ++realInd;
             }
         }
-
-        os << "]";
     }
 
 private:
@@ -357,18 +367,19 @@ private:
 };
 
 template <typename T>
-std::ostream& operator<<(std::ostream& o, const DimValues_<T>& dimValues) {
-    dimValues.printTo(o);
-    return o;
-}
-
-template <typename T>
-void printTo(std::ostream& os, const DimValues_<T>& dims) {
-    dims.printTo(os);
+void printTo(std::ostream& os, const DimValues_<T>& dimValues) {
+    os << "[";
+    dimValues.printImpl(os);
+    os << "]";
 }
 
 using DimValues = DimValues_<int>;
 
+template<class T>
+std::ostream& operator<<(std::ostream& stream, const DimValues_<T>& object) {
+    object.printImpl(stream);
+    return stream;
+}
 //
 // DimsOrder
 //
@@ -420,7 +431,7 @@ public:
     //
 
     // Convert from packed format to array of dimensions from minor to major.
-    SmallVector<Dim, MAX_DIMS_64> toPermutation() const;
+    DimVector toPermutation() const;
 
     // Get memory indeces for each dimension.
     DimValues toIndices() const;
@@ -448,6 +459,7 @@ inline bool operator!=(DimsOrder order1, DimsOrder order2) {
     return order1.code() != order2.code();
 }
 
+std::ostream& operator<<(std::ostream& stream, const DimsOrder& object);
 void printTo(std::ostream& os, DimsOrder order);
 
 struct DimsOrderHash final {
@@ -457,8 +469,24 @@ struct DimsOrderHash final {
 };
 
 using DimsOrderSet = std::unordered_set<DimsOrder, DimsOrderHash>;
+
 template <typename Val>
 using DimsOrderMap = std::unordered_map<DimsOrder, Val, DimsOrderHash>;
+
+//
+// Permutations
+//
+
+using PermutationIndexVector = SmallVector<int, MAX_DIMS_32>;   // we could use MAX_DIMS_64, but it's now unsupported by serializer.
+using PermutationDimsMap = DimValues_<Dim>;
+
+PermutationIndexVector permuteMapToVector(const PermutationDimsMap& permutation, DimsOrder inputOrder, DimsOrder outputOrder);
+
+PermutationDimsMap permuteVectorToMap(const PermutationIndexVector& permutation, DimsOrder inputOrder, DimsOrder outputOrder);
+
+PermutationIndexVector combinePermutationVectors(const PermutationIndexVector& first, const PermutationIndexVector& second);
+
+PermutationIndexVector calculatePermuteForReorder(DimsOrder oldLayout, DimsOrder newLayout);
 
 //
 // DataDesc
@@ -472,24 +500,43 @@ public:
 
     DataDesc() = default;
 
-    template <typename IntValue, typename = typename std::enable_if<std::is_integral<IntValue>::value>::type>
-    DataDesc(DataType type, DimsOrder dimsOrder, std::initializer_list<IntValue> dims) :
+    template<typename iterator,
+             typename value_type = typename std::iterator_traits<iterator>::value_type,
+             typename = typename std::enable_if<std::is_integral<value_type>::value>::type>
+    DataDesc(DataType type, DimsOrder dimsOrder, iterator dimsBegin, iterator dimsEnd) :
             _type(type), _dimsOrder(dimsOrder) {
-        auto perm = _dimsOrder.toPermutation();
-        IE_ASSERT(dims.size() == perm.size());
+        const auto perm = _dimsOrder.toPermutation();
+        const auto dimsSize = std::distance(dimsBegin, dimsEnd);
+        if (dimsSize != 0) {
+            VPU_THROW_UNLESS(dimsSize == perm.size(), "Dimensions' size ({}) and permutation size ({}) are expected to be the same", dimsSize, perm.size());
 
-        int ind = 0;
-        for (auto val : dims) {
-            _dims.set(perm[ind], val);
-            ++ind;
+            int ind = 0;
+            for (auto i = dimsBegin; i < dimsEnd; i++) {
+                auto val = *i;
+                _dims.set(perm[ind], val);
+                ++ind;
+            }
+        } else {
+            VPU_THROW_UNLESS(_dimsOrder == DimsOrder::C,
+                R"(Failed to create VPU data object: empty dimensions vector is supported only with "C" layout, but "{}" layout provided)", _dimsOrder);
+            _dims.set(perm[0], 1);
         }
     }
+
+    template <typename IntValue, typename = typename std::enable_if<std::is_integral<IntValue>::value>::type>
+    DataDesc(DataType type, DimsOrder dimsOrder, const std::vector<IntValue>& dims) : DataDesc(type, dimsOrder, dims.cbegin(), dims.cend()) {}
+
+    template <typename IntValue, typename = typename std::enable_if<std::is_integral<IntValue>::value>::type>
+    DataDesc(DataType type, DimsOrder dimsOrder, std::initializer_list<IntValue> dims) : DataDesc(type, dimsOrder, dims.begin(), dims.end()) {}
 
     template <typename IntValue, typename = typename std::enable_if<std::is_integral<IntValue>::value>::type>
     DataDesc(DimsOrder dimsOrder, std::initializer_list<IntValue> dims) : DataDesc(DataType::FP16, dimsOrder, dims) {}
 
     template <typename IntValue, typename = typename std::enable_if<std::is_integral<IntValue>::value>::type>
-    explicit DataDesc(std::initializer_list<IntValue> dims) : DataDesc(DataType::FP16, DimsOrder::fromNumDims(dims.size()), dims) {}
+    DataDesc(std::initializer_list<IntValue> dims) : DataDesc(DataType::FP16, DimsOrder::fromNumDims(dims.size()), dims) {}
+
+    template <typename IntValue, typename = typename std::enable_if<std::is_integral<IntValue>::value>::type>
+    explicit DataDesc(const std::vector<IntValue>& dims) : DataDesc(DataType::FP16, DimsOrder::fromNumDims(dims.size()), dims) {}
 
     explicit DataDesc(const ie::TensorDesc& ieDesc);
 
@@ -538,11 +585,21 @@ public:
 
     ie::TensorDesc toTensorDesc() const;
 
+    bool operator==(const DataDesc& rhs) const {
+        return _type == rhs.type() && _dimsOrder == rhs.dimsOrder() && _dims == rhs.dims();
+    }
+
+    bool operator!=(const DataDesc& rhs) const {
+        return !(*this == rhs);
+    }
+
 private:
     DataType _type = DataType::FP16;
     DimsOrder _dimsOrder;
     DimValues _dims;
 };
+
+std::ostream& operator<<(std::ostream& stream, const DataDesc& object);
 
 void printTo(std::ostream& os, const DataDesc& desc);
 void printTo(DotLabel& lbl, const DataDesc& desc);
@@ -558,7 +615,7 @@ VPU_DECLARE_ENUM(DimStride,
     Fixed
 )
 
-const int STRIDE_ALIGNMENT = 16;
+const int HW_STRIDE_ALIGNMENT = 16;
 
 //
 // StridesRequirement
@@ -631,8 +688,7 @@ int calcTotalByteSize(const DataDesc& desc, const DimValues& strides);
 //
 
 VPU_DECLARE_ENUM(BatchSupport,
-    Split,
-    ReplicateConstContent
+    Split
 )
 
 }  // namespace vpu

@@ -1,5 +1,5 @@
 """
- Copyright (c) 2019 Intel Corporation
+ Copyright (C) 2018-2020 Intel Corporation
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -14,8 +14,6 @@
  limitations under the License.
 """
 import logging as log
-
-import numpy as np
 
 from mo.graph.graph import Graph
 from mo.utils.model_analysis import AnalyzeAction
@@ -66,9 +64,31 @@ class InputsAnalysis(AnalyzeAction):
                     inputs_to_ignore.add(softmax_node.in_node(i).id)
         return inputs_to_ignore
 
+    @classmethod
+    def iterator_get_next_analysis(cls, graph: Graph, inputs_desc: dict):
+        message = None
+        op_nodes = graph.get_op_nodes(op='IteratorGetNext')
+        if len(op_nodes):
+            params = ''
+            for iter_get_next in op_nodes:
+                for port in iter_get_next.out_nodes().keys():
+                    inputs_desc['{}:{}'.format(iter_get_next.soft_get('name', iter_get_next.id), port)] = {
+                        'shape': iter_get_next.shapes[port].tolist(),
+                        'value': None,
+                        'data_type': iter_get_next.types[port]
+                    }
+                    if params != '':
+                        params = params + ','
+                    shape = str(iter_get_next.shapes[port].tolist()).replace(',', '')
+                    params = params + '{}:{}{}'.format(iter_get_next.soft_get('name', iter_get_next.id), port, shape)
+            message = 'It looks like there is IteratorGetNext as input\n' \
+                      'Run the Model Optimizer with:\n\t\t--input "{}"\n' \
+                      'And replace all negative values with positive values'.format(params)
+        return message
+
     def analyze(self, graph: Graph):
         inputs_desc = dict()
-
+        message = InputsAnalysis.iterator_get_next_analysis(graph, inputs_desc)
         inputs_to_ignore = InputsAnalysis.fifo_queue_analysis(graph, inputs_desc)
         if graph.graph['fw'] == 'mxnet':
             inputs_to_ignore.update(InputsAnalysis.ignore_mxnet_softmax_inputs(graph))
@@ -79,7 +99,6 @@ class InputsAnalysis(AnalyzeAction):
                                        'data_type': input.soft_get('data_type', None),
                                        'value': None,
                                        }
-
         placeholders_with_default = graph.get_op_nodes(op='PlaceholderWithDefault')
         for input in placeholders_with_default:
             inputs_desc[input.name] = {'shape': input.soft_get('shape', None),
@@ -95,4 +114,4 @@ class InputsAnalysis(AnalyzeAction):
         if graph.graph['fw'] == 'onnx':
             for inp in inputs_desc.values():
                 inp['shape'] = [-1 if item == 0 else item for item in inp['shape']]
-        return {'inputs': inputs_desc}
+        return {'inputs': inputs_desc}, message

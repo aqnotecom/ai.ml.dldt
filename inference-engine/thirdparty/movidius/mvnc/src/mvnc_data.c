@@ -19,8 +19,8 @@
 #include <string.h>
 #include "mvnc_data.h"
 #define MVLOG_UNIT_NAME ncTool
-#include "mvLog.h"
-#include "mvStringUtils.h"
+#include "XLinkLog.h"
+#include "XLinkStringUtils.h"
 #include "mvnc_tool.h"
 
 XLinkProtocol_t convertProtocolToXlink(

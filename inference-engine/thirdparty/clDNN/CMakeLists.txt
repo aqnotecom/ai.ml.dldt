@@ -31,6 +31,7 @@ include(IntelHelpers)
 set(CMAKE_CONFIGURATION_TYPES
     "Debug"
     "Release"
+    "RelWithDebInfo"
   )
 set(CMAKE_CONFIGURATION_TYPES ${CMAKE_CONFIGURATION_TYPES} CACHE INTERNAL "Available build configurations.")
 
@@ -44,6 +45,9 @@ set(CLDNN__PROJ_NAME "clDNN")
 # Default languages: C, C++.
 project("${CLDNN__PROJ_NAME}")
 
+if(POLICY CMP0063)
+    cmake_policy(SET CMP0063 NEW)
+endif()
 
 # ======================================================================================================
 # ==================================== BUILD CONFIGURATIONS (part 2) ===================================
@@ -105,6 +109,11 @@ if(CMAKE_CFG_INTDIR STREQUAL ".")
 else()
   set(CLDNN__TARGET_CFG_VAR "${CMAKE_CFG_INTDIR}")
   set(CLDNN__MULTI_CFG_GEN  YES)
+endif()
+
+if (NOT "${CLDNN__TARGET_CFG_VAR}" MATCHES "^(Release|Debug)$")
+    message(STATUS "[clDNN] ${CLDNN__TARGET_CFG_VAR} configuration is not supported for prebuilt dependencies. Release will be used")
+    set (CLDNN__TARGET_CFG_VAR "Release")
 endif()
 
 # Code generation settings.
@@ -242,6 +251,8 @@ if(DEFINED CMAKE_BUILD_TYPE)
     set(__CLDNN_BuildType "Release")
   elseif(__CLDNN_BuildType MATCHES "^debug$")
     set(__CLDNN_BuildType "Debug")
+  elseif(__CLDNN_BuildType MATCHES "^relwithdebinfo$")
+    set(__CLDNN_BuildType "RelWithDebInfo")
   else()
     set(__CLDNN_BuildType "Debug")
     if(NOT CLDNN__MULTI_CFG_GEN)
@@ -847,6 +858,7 @@ foreach(__CLDNN_CompilerFlagName IN ITEMS "CMAKE_CXX_FLAGS" "CMAKE_C_FLAGS")
           -Wno-error=missing-field-initializers
           -Wno-error=unused-parameter
           -Wno-error=unused-function
+          -Wno-error=pedantic
           -march=corei7
           -mstackrealign
           -msse
@@ -894,7 +906,7 @@ intel_config_flag_apply_settings(
     CMAKE_CXX_FLAGS
     ALL_PATTERN ""
     SET
-      RttiDisabled
+      RttiEnabled
       StandardCxx11
   )
 
@@ -977,7 +989,10 @@ if((CMAKE_C_COMPILER_ID MATCHES "^Clang$") OR (CMAKE_CXX_COMPILER_ID MATCHES "^C
         -Wl,-headerpad_max_install_names
     )
 
-  list(APPEND CLDNN__SYSTEM_LINK_LIBRARIES "c++" "c++abi" "supc++" "dl")
+  list(APPEND CLDNN__SYSTEM_LINK_LIBRARIES "c++" "c++abi" "dl")
+  if(NOT ANDROID)
+    list(APPEND CLDNN__SYSTEM_LINK_LIBRARIES "supc++")
+  endif()
 endif()
 
 unset(__CLDNN_LinkerFlagName)
@@ -1016,11 +1031,13 @@ set_property(DIRECTORY APPEND PROPERTY COMPILE_DEFINITIONS
 # ===================================== Include/Link directories =======================================
 
 include_directories(
-    ${CLDNN__IOCL_ICD_INCDIRS}
-	${CLDNN_UTILS__RAPIDJSON_INCDIRS}
+    ${CLDNN_UTILS__RAPIDJSON_INCDIRS}
     "${CLDNN__KHR_CLHPP_DIR}"
     "${CLDNN__CODEGEN_INCDIR}"
   )
+
+include_directories(SYSTEM
+    ${CLDNN__IOCL_ICD_INCDIRS})
 
 add_library(clDNN_OpenCL UNKNOWN IMPORTED)
 set_target_properties(clDNN_OpenCL

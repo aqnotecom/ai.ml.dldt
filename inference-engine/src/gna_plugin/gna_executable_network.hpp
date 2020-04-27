@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2019 Intel Corporation
+// Copyright (C) 2018-2020 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -8,10 +8,11 @@
 #include <map>
 #include <vector>
 
+#include <net_pass.h>
 #include <cpp_interfaces/impl/ie_executable_network_thread_safe_default.hpp>
 #include "gna_infer_request.hpp"
 #include "gna_plugin.hpp"
-#include <cpp_interfaces/ie_executor_manager.hpp>
+#include <threading/ie_executor_manager.hpp>
 #include <cpp_interfaces/impl/ie_executable_network_thread_safe_async_only.hpp>
 
 namespace GNAPluginNS {
@@ -29,6 +30,8 @@ class GNAExecutableNetwork : public InferenceEngine::ExecutableNetworkThreadSafe
 
     GNAExecutableNetwork(InferenceEngine::ICNNNetwork &network, const std::map<std::string, std::string> &config)
         : plg(std::make_shared<GNAPlugin>(config)) {
+        InferenceEngine::NetPass::ConvertPrecision(network, InferenceEngine::Precision::I64, InferenceEngine::Precision::I32);
+        InferenceEngine::NetPass::ConvertPrecision(network, InferenceEngine::Precision::U64, InferenceEngine::Precision::I32);
         plg->LoadNetwork(network);
     }
 
@@ -48,6 +51,12 @@ class GNAExecutableNetwork : public InferenceEngine::ExecutableNetworkThreadSafe
 
     void Export(const std::string &modelFileName) override {
         plg->Export(modelFileName);
+    }
+
+    using ExecutableNetworkInternal::Export;
+
+    void ExportImpl(std::ostream&) override {
+        THROW_IE_EXCEPTION << NOT_IMPLEMENTED_str;
     }
 };
 }  // namespace GNAPluginNS

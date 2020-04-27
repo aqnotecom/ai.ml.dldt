@@ -19,7 +19,8 @@
 
 #include <stdint.h>
 
-#include "common/primitive_attr.hpp"
+#include "primitive_attr.hpp"
+#include "cpu_isa_traits.hpp"
 
 namespace mkldnn {
 namespace impl {
@@ -32,6 +33,8 @@ enum conv_loop_order_t {loop_cgn, loop_gnc, loop_ngc, loop_gncw, loop_cwgn,
                             loop_ngcw, loop_nhwcg, loop_nwcg};
 enum conv_1x1_loop_order_t {loop_rbl, loop_rlb, loop_lbr, loop_lrb, loop_blr,
                             loop_brl};
+enum conv_gemm_loop_order_t { gemm_loop_rlb, gemm_loop_lrb };
+
 enum conv_kernel_kind_t {embd_bcast, expl_bcast};
 enum conv_harness_t {harness_2d_reduction, harness_3d_reduction,
                      harness_mb_reduction};
@@ -143,9 +146,14 @@ struct jit_conv_conf_t {
     int oh_blk_size;
     // s8s8 convolution
     bool signed_input;
+    int with_scales;
+    bool with_input_zp;
+    bool with_weights_zp;
+    bool is_per_channel_input_zp;
+    bool is_per_channel_weights_zp;
     float wei_adj_scale;
 
-    bool is_cpx;
+    cpu_isa_t isa;
 
     // planar conv
     int nb_ow_blocking;
@@ -396,6 +404,10 @@ struct jit_conv_call_s {
     size_t ch_work;
     size_t t_overflow;
     size_t b_overflow;
+    size_t l_overflow;
+    size_t r_overflow;
+    size_t front_overflow;
+    size_t back_overflow;
     size_t oh_blocks;
     int flags;
 
@@ -404,7 +416,11 @@ struct jit_conv_call_s {
     const void *src_row2; /* hack, non-const for backward_data */
 
     size_t oc_off;
+    size_t ic_off;
     size_t oc_off_prf;
+    const void *input_zp;
+    const void *weights_zp;
+    const void *weights_zp_compensation;
 };
 
 struct jit_deconv_call_s {
@@ -509,7 +525,12 @@ struct jit_1x1_conv_conf_t {
     int dw_conv_oh, dw_conv_ow;
     data_type_t dw_conv_dst_dt;
 
-    bool is_cpx;
+    cpu_isa_t isa;
+
+    bool with_input_zp;
+    bool with_weights_zp;
+    bool is_per_channel_input_zp;
+    bool is_per_channel_weights_zp;
 
     /* u8s8s32x */
     int ic_dim, nb_ic, nb_ic_blocking, nb_ic_blocking_max;
@@ -545,7 +566,13 @@ struct jit_gemm_conv_conf_t {
     float wei_adj_scale;
     int oh_block;
     int ow_block;
+    int os_block;
     bool outer_threading;
+    conv_gemm_loop_order_t loop_order;
+    int nthr_oc;
+
+    bool with_input_zp;
+    bool with_weights_zp;
 };
 
 struct jit_1x1_conv_call_s {
@@ -616,7 +643,7 @@ struct jit_pool_conf_t {
     bool is_bf16;
     int dt_size;
 
-    bool is_cpx;
+    cpu_isa_t isa;
 };
 
 struct jit_pool_call_s {

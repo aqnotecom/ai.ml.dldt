@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2019 Intel Corporation
+// Copyright (C) 2018-2020 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -36,14 +36,13 @@ public:
 
 
 protected:
+    IE_SUPPRESS_DEPRECATED_START
     InferenceEngine::ILayerImplFactory::Ptr extFactory;
     InferenceEngine::IShapeInferImpl::Ptr extShapeInference;
-    std::vector<InferenceEngine::ILayerImpl::Ptr> impls;
+    IE_SUPPRESS_DEPRECATED_END
+    std::vector<InferenceEngine::ILayerExecImpl::Ptr> impls;
     std::map<std::string, std::string> params;
     std::map<std::string, InferenceEngine::Blob::Ptr> blobs;
-
-private:
-    static Register<MKLDNNGenericNode> reg;
 };
 
 }  // namespace MKLDNNPlugin

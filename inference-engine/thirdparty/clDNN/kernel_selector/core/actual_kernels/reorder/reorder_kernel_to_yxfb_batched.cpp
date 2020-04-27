@@ -46,6 +46,10 @@ bool ReorderKernel_to_yxfb_batched::Validate(const Params& params, const optiona
         return false;
     }
 
+    if ((r_params.inputs[0].GetLayout() == DataLayout::b_fs_zyx_fsv16 || r_params.inputs[0].GetLayout() == DataLayout::bs_fs_zyx_bsv16_fsv16) &&
+        r_params.inputs[0].Z().v != 1)
+        return false;
+
     return true;
 }
 

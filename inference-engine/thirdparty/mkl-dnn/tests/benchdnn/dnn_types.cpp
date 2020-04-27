@@ -114,12 +114,15 @@ data_kind_t fmt2data_kind(mkldnn_memory_format_t fmt) {
     case mkldnn_hwigo:
     case mkldnn_giohw:
     case mkldnn_hwigo_s8s8:
+    case mkldnn_dhwigo_s8s8:
     case mkldnn_gOIhw8i8o:
     case mkldnn_gOIhw16i16o:
     case mkldnn_gOIhw2i8o4i:
     case mkldnn_gOIhw2i8o4i_s8s8:
     case mkldnn_gOIhw4i16o4i:
     case mkldnn_gOIhw4i16o4i_s8s8:
+    case mkldnn_gOIdhw4i16o4i:
+    case mkldnn_gOIdhw4i16o4i_s8s8:
     case mkldnn_gOIhw8i16o2i:
     case mkldnn_gIOhw8i16o2i:
     case mkldnn_gOIdhw8i16o2i:
@@ -135,6 +138,7 @@ data_kind_t fmt2data_kind(mkldnn_memory_format_t fmt) {
     case mkldnn_gOhwi8o:
     case mkldnn_gOhwi16o:
     case mkldnn_Goihw8g:
+    case mkldnn_Goihw8g_s8s8:
     case mkldnn_Goihw16g:
     case mkldnn_Goihw16g_s8s8:
     case mkldnn_gOhIw16o4i:
@@ -143,6 +147,12 @@ data_kind_t fmt2data_kind(mkldnn_memory_format_t fmt) {
     case mkldnn_gOIdhw16o16i:
     case mkldnn_gOidhw16o:
     case mkldnn_gOdhwi16o:
+    case mkldnn_gOdhIw8o4i:
+    case mkldnn_gOdhIw8o4i_s8s8:
+    case mkldnn_Goidhw8g:
+    case mkldnn_Goidhw8g_s8s8:
+    case mkldnn_Goidhw16g:
+    case mkldnn_Goidhw16g_s8s8:
         return GWEI;
 
     default: return WEI;
@@ -219,6 +229,7 @@ attr_t::post_ops_t::kind_t attr_t::post_ops_t::str2kind(const char *str) {
     CASE(BRELU);
     CASE(SRELU);
     CASE(LOGISTIC);
+    CASE(EXP);
 #undef CASE
     assert(!"unknown attr::post_ops::kind");
     return KIND_TOTAL;
@@ -237,6 +248,7 @@ const char *attr_t::post_ops_t::kind2str(attr_t::post_ops_t::kind_t kind) {
     CASE(BRELU, "brelu");
     CASE(SRELU, "srelu");
     CASE(LOGISTIC, "logistic");
+    CASE(EXP, "exp");
 #undef CASE
     assert(!"unknown attr::post_ops::kind");
     return "unknown attr::post_ops::kind";
@@ -255,6 +267,7 @@ mkldnn_alg_kind_t attr_t::post_ops_t::kind2mkldnn_kind(
     CASE(BRELU, mkldnn_eltwise_bounded_relu);
     CASE(SRELU, mkldnn_eltwise_soft_relu);
     CASE(LOGISTIC, mkldnn_eltwise_logistic);
+    CASE(EXP, mkldnn_eltwise_exp);
 #undef CASE
     assert(!"unknown attr::post_ops::kind");
     return mkldnn_alg_kind_undef;
@@ -347,6 +360,7 @@ void attr_t::post_ops_t::to_str(char *buffer, char **end_b) const {
         case BRELU:
         case SRELU:
         case LOGISTIC:
+        case EXP:
             buffer += sprintf(buffer, "%s:%g", kind2str(e.kind), e.eltwise.alpha);
             if (e.eltwise.beta != 0.f || e.eltwise.scale != 1.f)
                 buffer += sprintf(buffer, ":%g:%g", e.eltwise.beta, e.eltwise.scale);
@@ -453,7 +467,7 @@ mkldnn_primitive_attr_t create_mkldnn_attr(const attr_t &attr, int scale_cnt,
             const auto &e = attr.post_ops.entry[idx];
             switch (attr.post_ops.entry[idx].kind) {
             case attr_t::post_ops_t::SUM:
-                DNN_SAFE_V(mkldnn_post_ops_append_sum(ops, e.sum.scale));
+                DNN_SAFE_V(mkldnn_post_ops_append_sum(ops, e.sum.scale, mkldnn_f32));
                 break;
             case attr_t::post_ops_t::RELU:
             case attr_t::post_ops_t::TANH:
@@ -465,6 +479,7 @@ mkldnn_primitive_attr_t create_mkldnn_attr(const attr_t &attr, int scale_cnt,
             case attr_t::post_ops_t::BRELU:
             case attr_t::post_ops_t::SRELU:
             case attr_t::post_ops_t::LOGISTIC:
+            case attr_t::post_ops_t::EXP:
                 DNN_SAFE_V(mkldnn_post_ops_append_eltwise(ops, e.eltwise.scale,
                             e.eltwise.alg, e.eltwise.alpha, e.eltwise.beta));
                 break;
@@ -548,6 +563,7 @@ void maybe_post_ops(float &d, float dst, const attr_t &attr) {
         case pk::BRELU: d = s * bounded_relu_fwd(d, a); break;
         case pk::SRELU: d = s * soft_relu_fwd(d); break;
         case pk::LOGISTIC: d = s * logistic_fwd(d); break;
+        case pk::EXP: d = s * exp_fwd(d); break;
         default: assert(!"unknown attr::post_ops::kind");
         }
     }

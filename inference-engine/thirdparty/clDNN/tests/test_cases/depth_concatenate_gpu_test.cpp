@@ -26,7 +26,7 @@
 #include "api/fully_connected.hpp"
 #include "api/pooling.hpp"
 #include "api/crop.hpp"
-#include "api/upsampling.hpp"
+#include "api/resample.hpp"
 #include "api/reshape.hpp"
 #include <api/topology.hpp>
 #include <api/network.hpp>
@@ -133,7 +133,7 @@ void concat_basic_with_reorder() {
     const auto& engine = get_test_engine();
     auto input1 = memory::allocate(engine, {data_types::f32, format::yxfb, {2, 2, 1, 1}});
     auto input2 = memory::allocate(engine, {data_types::f32, format::yxfb, {2, 3, 1, 1}});
-    auto outs = {2.0f, 3.0f, 0.0f, 1.0f, 1.0f, 4.0f, -4.0f, -7.0f, 0.0f, 0.0f};
+    auto outs = {3.0f, 4.0f, 0.0f, 1.0f, 1.0f, 4.0f, -4.0f, -8.0f, 0.0f, 0.0f};
     set_values(input1, {2.5f, 3.7f, 0.2f, 1.4f});
     set_values(input2, {1.0f, 4.1f, -4.3f, -7.5f, 0.0f, -0.2f});
 
@@ -266,7 +266,7 @@ TEST(concatenate_f32_gpu, test_concatenation_of_pool_and_unpool) {
                          {1, 1, 2, 1}, /*kernel*/
                          {1, 1, 1, 1}  /*stride*/
                          ));
-    topology.add(upsampling("unpool1", "input1", tensor(1, 1, 2, 2), 0, upsampling_sample_type::nearest));
+    topology.add(resample("unpool1", "input1", tensor(1, 1, 2, 2), 0, resample_type::nearest));
     topology.add(concatenation("concat1", {"pool1", "unpool1"}, cldnn::concatenation::along_x));
     topology.add(data("weights", weights));
     topology.add(convolution("conv", "concat1", {"weights"}));
@@ -888,10 +888,7 @@ using namespace cldnn;
 class depth_concatenate_test : public tests::generic_test {
 public:
     static void TearDownTestCase() {
-        for (auto generic_params : all_generic_params) {
-            delete generic_params;
-        }
-
+        all_generic_params.clear();
         all_layer_params.clear();
     }
 
@@ -915,8 +912,8 @@ public:
         return all_layer_params;
     }
 
-    static std::vector<tests::test_params*> generate_generic_test_params(int input_count) {
-        std::vector<tests::test_params*> all_generic_params;
+    static std::vector<std::shared_ptr<tests::test_params>> generate_generic_test_params(int input_count) {
+        std::vector<std::shared_ptr<tests::test_params>> all_generic_params;
 
         auto data_types = test_data_types();
 
@@ -929,7 +926,7 @@ public:
                     switch (input_count) {
                         case 1:
                             for (auto f0 : test_feature_sizes) {
-                                test_params* tp = new test_params();
+                                std::shared_ptr<tests::test_params> tp = std::make_shared<test_params>();
                                 tp->data_type = dt;
 
                                 tp->input_layouts.push_back(cldnn::layout(tp->data_type, tp->fmt, cldnn::tensor(b, f0, w, h)));
@@ -940,7 +937,7 @@ public:
                         case 2:
                             for (auto f0 : test_feature_sizes)
                                 for (auto f1 : test_feature_sizes) {
-                                    test_params* tp = new test_params();
+                                    std::shared_ptr<tests::test_params> tp = std::make_shared<test_params>();
                                     tp->data_type = dt;
 
                                     tp->input_layouts.push_back(cldnn::layout(tp->data_type, tp->fmt, cldnn::tensor(b, f0, w, h)));
@@ -953,7 +950,7 @@ public:
                             for (auto f0 : test_feature_sizes)
                                 for (auto f1 : test_feature_sizes)
                                     for (auto f2 : test_feature_sizes) {
-                                        test_params* tp = new test_params();
+                                        std::shared_ptr<tests::test_params> tp = std::make_shared<test_params>();
                                         tp->data_type = dt;
 
                                         tp->input_layouts.push_back(cldnn::layout(tp->data_type, tp->fmt, cldnn::tensor(b, f0, w, h)));
@@ -971,8 +968,8 @@ public:
         return all_generic_params;
     }
 
-    static std::vector<std::tuple<test_params*, std::shared_ptr<cldnn::primitive>>> generate_all_test_params() {
-        std::vector<std::tuple<test_params*, std::shared_ptr<cldnn::primitive>>> res;
+    static std::vector<std::tuple<std::shared_ptr<tests::test_params>, std::shared_ptr<cldnn::primitive>>> generate_all_test_params() {
+        std::vector<std::tuple<std::shared_ptr<tests::test_params>, std::shared_ptr<cldnn::primitive>>> res;
 
         for (int i = 1; i <= 3; ++i) {
             auto tpv = generate_generic_test_params(i);
@@ -1060,7 +1057,7 @@ public:
         }
     }
 
-    static std::string custom_param_name(const ::testing::TestParamInfo<std::tuple<test_params*, std::shared_ptr<cldnn::primitive>>>& info) {
+    static std::string custom_param_name(const ::testing::TestParamInfo<std::tuple<std::shared_ptr<tests::test_params>, std::shared_ptr<cldnn::primitive>>>& info) {
         std::stringstream res;
 
         const auto& p = std::get<0>(info.param);
@@ -1085,12 +1082,12 @@ public:
     }
 
 private:
-    static std::vector<tests::test_params*> all_generic_params;
+    static std::vector<std::shared_ptr<tests::test_params>> all_generic_params;
     static std::vector<std::shared_ptr<cldnn::primitive>> all_layer_params;
 };
 
 std::vector<std::shared_ptr<cldnn::primitive>> depth_concatenate_test::all_layer_params = {};
-std::vector<tests::test_params*> depth_concatenate_test::all_generic_params = {};
+std::vector<std::shared_ptr<tests::test_params>> depth_concatenate_test::all_generic_params = {};
 
 TEST_P(depth_concatenate_test, DEPTHCONCATENATE) {
     run_single_test();

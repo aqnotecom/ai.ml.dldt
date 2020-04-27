@@ -1,4 +1,4 @@
-// Copyright (c) 2019 Intel Corporation
+// Copyright (c) 2019-2020 Intel Corporation
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -77,7 +77,7 @@ ConvolutionKernelBase::DispatchData ConvolutionKernel_bfyx_to_fs_byx_fsv32::SetD
 
     AutoTuneOption option = GetAutoTuneOptions(arg, autoTuneIndex);
 
-    runInfo.effiency = FORCE_PRIORITY_3;
+    runInfo.efficiency = FORCE_PRIORITY_3;
 
     runInfo.cldnnStyle.blockHeight = option.blockHeight;
     runInfo.cldnnStyle.blockWidth = option.blockWidth;
@@ -125,6 +125,17 @@ JitConstants ConvolutionKernel_bfyx_to_fs_byx_fsv32::GetJitConstants(const convo
     jit.AddConstant(MakeJitConstant("FSV", fsv));
     jit.AddConstant(MakeJitConstant("SUB_GROUP_SIZE", subGroupSize));
     jit.AddConstant(MakeJitConstant("FSV_PER_THREAD", fsvPerThread));
+
+    if (!params.fused_ops.empty()) {
+        auto input_dt = GetUnitType(params);
+        FusedOpsConfiguration conf_vec_elem = {"_VEC_ELEM",
+                                               {"b", "fs * FSV + sglid + out_f * SUB_GROUP_SIZE", "or + out_y", "oc + out_x"},
+                                               "tmp_write[out_f]", input_dt, 1 };
+        FusedOpsConfiguration conf_scalar = {"_SCALAR",
+                                             {"b", "fs * FSV + sglid + out_f * SUB_GROUP_SIZE", "or + out_y", "oc + out_x"},
+                                             "out[out_idx]", input_dt, 1 };
+        jit.Merge(MakeFusedOpsJitConstants(params, {conf_vec_elem, conf_scalar}));
+    }
 
     return jit;
 }

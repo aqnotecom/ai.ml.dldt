@@ -1,4 +1,4 @@
-﻿// Copyright (c) 2016-2019 Intel Corporation
+﻿// Copyright (c) 2016-2020 Intel Corporation
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@
 #include "jitter.h"
 #include <string>
 #include <memory>
+#include <vector>
 
 namespace kernel_selector {
 struct CommonDispatchData {
@@ -26,9 +27,9 @@ struct CommonDispatchData {
     size_t lws0, lws1, lws2;
     bool
         fp16UnitUsed;  ///< Value indicating that FP16 half precision floating point type will be used (instead of single precision).
-    float effiency;
+    float efficiency;
 
-    CommonDispatchData() : gws0(0), gws1(0), gws2(0), lws0(0), lws1(0), lws2(0), fp16UnitUsed(false), effiency(0.0f){}
+    CommonDispatchData() : gws0(0), gws1(0), gws2(0), lws0(0), lws1(0), lws2(0), fp16UnitUsed(false), efficiency(0.0f){}
 };
 
 class common_kernel_base : public KernelBase {
@@ -55,6 +56,9 @@ protected:
                                                   const std::string& entry_point,
                                                   const EngineInfo& engine_info,
                                                   const std::string& exe_mode = DEFAULT) const;
+
+    uint32_t GetFusedPrimitiveInputsCount(const Params &params) const;
+
     void FillCLKernelData(clKernelData& kernel,
                           const CommonDispatchData& runInfo,
                           const EngineInfo& engine_info,
@@ -65,8 +69,6 @@ protected:
                           bool weights = false,
                           bool bias = false,
                           int number_of_inputs = 1,
-                          bool quantization = false,
-                          bool calibration = false,
-                          int number_of_inputs_for_fused_prims = 0) const;
+                          uint32_t number_of_inputs_for_fused_prims = 0) const;
 };
 }  // namespace kernel_selector

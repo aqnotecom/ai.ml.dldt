@@ -69,7 +69,7 @@ struct gemm_bf16_convolution_fwd_t: public cpu_primitive_t {
 
             auto scratchpad = scratchpad_registry().registrar();
             return jit_gemm_convolution_utils::init_conf(jcp_, scratchpad,
-                    *desc(), src_pd(), weights_pd(0), dst_pd(),
+                    *desc(), src_pd(), weights_pd(0), dst_pd(), *attr(),
                     mkldnn_get_max_threads());
         }
 
@@ -223,7 +223,7 @@ private:
         Xbyak::Zmm bf16_emu_reserv_1 = Xbyak::Zmm(27);
         Xbyak::Zmm bf16_emu_reserv_2 = Xbyak::Zmm(28);
         Xbyak::Zmm bf16_emu_reserv_3 = Xbyak::Zmm(29);
-        Xbyak::Reg64 bf16_emu_reserv_4 = r11;
+        Xbyak::Reg64 bf16_emu_reserv_4 = r15;
         Xbyak::Zmm bf16_emu_reserv_5 = Xbyak::Zmm(30);
         Xbyak::Zmm bf16_emu_reserv_6 = Xbyak::Zmm(31);
 
@@ -236,7 +236,6 @@ private:
         int max_data_reg_idx_, max_unroll_, compute_reg_step_;
         int data_reg_base_idx_;
         size_t vlen_;
-        bool is_cpx_;
         bf16_emulation_t *bf16_emu_;
         jit_uni_eltwise_injector_f32<avx512_common> *eltwise_injector_;
 
@@ -308,7 +307,7 @@ struct gemm_bf16_convolution_bwd_data_t: public cpu_primitive_t {
 
             auto scratchpad = scratchpad_registry().registrar();
             return jit_gemm_convolution_utils::init_conf(jcp_, scratchpad,
-                    *desc(), diff_src_pd(), weights_pd(0), diff_dst_pd(),
+                    *desc(), diff_src_pd(), weights_pd(0), diff_dst_pd(), *attr(),
                     mkldnn_get_max_threads());
         }
 
@@ -404,7 +403,7 @@ struct gemm_bf16_convolution_bwd_weights_t: public cpu_primitive_t {
 
             auto scratchpad = scratchpad_registry().registrar();
             return jit_gemm_convolution_utils::init_conf(jcp_, scratchpad,
-                    *desc(), src_pd(), diff_weights_pd(0), diff_dst_pd(),
+                    *desc(), src_pd(), diff_weights_pd(0), diff_dst_pd(), *attr(),
                     mkldnn_get_max_threads());
         }
 

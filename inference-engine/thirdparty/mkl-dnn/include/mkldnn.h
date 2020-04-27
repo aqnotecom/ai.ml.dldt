@@ -356,6 +356,24 @@ mkldnn_status_t MKLDNN_API mkldnn_primitive_attr_set_output_scales(
         mkldnn_primitive_attr_t attr, int count, int mask,
         const float *scales);
 
+mkldnn_status_t MKLDNN_API mkldnn_primitive_attr_get_output_compensations(
+        const_mkldnn_primitive_attr_t attr, int *count, int *mask, const int32_t **compensations);
+
+mkldnn_status_t MKLDNN_API mkldnn_primitive_attr_set_output_compensations(
+        mkldnn_primitive_attr_t attr, int count, int mask, const int32_t *compensations);
+
+mkldnn_status_t MKLDNN_API mkldnn_primitive_attr_get_input_zero_points(
+        const_mkldnn_primitive_attr_t attr, int *count, int *mask, const uint8_t **zero_points);
+
+mkldnn_status_t MKLDNN_API mkldnn_primitive_attr_set_input_zero_points(
+        mkldnn_primitive_attr_t attr, int count, int mask, const uint8_t *zero_points);
+
+mkldnn_status_t MKLDNN_API mkldnn_primitive_attr_get_weights_zero_points(
+        const_mkldnn_primitive_attr_t attr, int *count, int *mask, const float **zero_points);
+
+mkldnn_status_t MKLDNN_API mkldnn_primitive_attr_set_weights_zero_points(
+        mkldnn_primitive_attr_t attr, int count, int mask, const float *zero_points);
+
 /** Returns @p post_ops for given @p attr.
  *
  * @warning
@@ -419,7 +437,7 @@ mkldnn_primitive_kind_t MKLDNN_API mkldnn_post_ops_get_kind(
  *      destination.
  */
 mkldnn_status_t MKLDNN_API mkldnn_post_ops_append_sum(
-        mkldnn_post_ops_t post_ops, float scale);
+        mkldnn_post_ops_t post_ops, float scale, mkldnn_data_type_t data_type);
 
 /** Gets the parameters of the accumulation (sum) post operation with index
  * @p index in the sequence of @p post_ops.
@@ -429,7 +447,7 @@ mkldnn_status_t MKLDNN_API mkldnn_post_ops_append_sum(
  *      operation, the function returns #mkldnn_invalid_arguments.
  */
 mkldnn_status_t MKLDNN_API mkldnn_post_ops_get_params_sum(
-        const_mkldnn_post_ops_t post_ops, int index, float *scale);
+        const_mkldnn_post_ops_t post_ops, int index, float *scale, mkldnn_data_type_t* data_type);
 
 /** Appends eltwise post operation to the @p post_ops with given parameters
  * @p kind, @p alpha, and @p beta (@sa mkldnn_eltwise_forward_desc_init and
@@ -513,6 +531,32 @@ mkldnn_status_t MKLDNN_API mkldnn_post_ops_append_binarization(
 mkldnn_status_t MKLDNN_API mkldnn_post_ops_get_params_binarization(
         const_mkldnn_post_ops_t post_ops, int index,
         mkldnn_alg_kind_t *alg, const float** weights_data, const float** output_mask);
+
+/** Appends quantization post operation to the @p post_ops with given parameters
+ * @p kind and @p weights (@sa mkldnn_quantization_forward_desc_init and
+ * mkldnn_quantization_desc_t).
+ *
+ * The kind of this post operation is #mkldnn_quantization.
+ *
+ * In the simplest case when the quantization is the only post operation, the
+ * computations would be:
+ * dst[] <- quantization_op ( op(...) ) // instead of dst[] <- op(...)
+ * where quantization_op is configured with given parameters.
+ */
+mkldnn_status_t MKLDNN_API mkldnn_post_ops_append_quantization(
+        mkldnn_post_ops_t post_ops, mkldnn_alg_kind_t alg,
+        int crop_low_count, const float* crop_low, int crop_high_count, const float* crop_high,
+        int input_scale_count, const float* input_scale, int input_shift_count, const float* input_shift,
+        int output_scale_count, const float* output_scale, int output_shift_count, const float* output_shift);
+
+/** Gets the quantization parameters of the post operation with index @p index in
+ * the sequence of @p post_ops.
+ */
+mkldnn_status_t MKLDNN_API mkldnn_post_ops_get_params_quantization(
+        const_mkldnn_post_ops_t post_ops, int index, mkldnn_alg_kind_t *alg,
+        int* crop_low_count, const float** crop_low, int* crop_high_count, const float** crop_high,
+        int* input_scale_count, const float** input_scale, int* input_shift_count, const float** input_shift,
+        int* output_scale_count, const float** output_scale, int* output_shift_count, const float** output_shift);
 
 /** @} */
 
@@ -1813,19 +1857,29 @@ mkldnn_status_t MKLDNN_API mkldnn_dilated_binary_convolution_forward_desc_init(
 
 /** @} */
 
-/** @addtogroup c_api_binarization Binarization
+/** @addtogroup c_api_quantization quantization
  * A primitive to binarize input using different approaches
  * @{ */
 
-/** Initializes a @p binarization_desc for forward propagation using @p prop_kind
+/** Initializes a @p quantization_desc for forward propagation using @p prop_kind
  * (possible values are #mkldnn_forward_training or #mkldnn_forward_inference),
  * @p alg_kind algorithm and memory descriptors.
- * @sa mkldnn_binarization_desc_t for details */
+ * @sa mkldnn_quantization_desc_t for details */
 mkldnn_status_t MKLDNN_API mkldnn_binarization_forward_desc_init(
-        mkldnn_binarization_desc_t *binarization_desc, mkldnn_prop_kind_t prop_kind,
-        mkldnn_alg_kind_t alg_kind, const mkldnn_memory_desc_t *src_desc,
-        const mkldnn_memory_desc_t *dst_desc, const mkldnn_memory_desc_t *weights_desc,
-        const mkldnn_memory_desc_t *output_mask_desc);
+        mkldnn_quantization_desc_t *quantization_desc, mkldnn_prop_kind_t prop_kind,
+        mkldnn_alg_kind_t alg_kind, int axis,
+        const mkldnn_memory_desc_t *src_desc,
+        const mkldnn_memory_desc_t *thresholds_desc, const mkldnn_memory_desc_t *output_mask_desc,
+        const mkldnn_memory_desc_t *dst_desc);
+
+mkldnn_status_t MKLDNN_API mkldnn_quantization_forward_desc_init(
+        mkldnn_quantization_desc_t *quantization_desc, mkldnn_prop_kind_t prop_kind,
+        mkldnn_alg_kind_t alg_kind, int axis,
+        const mkldnn_memory_desc_t *src_desc,
+        const mkldnn_memory_desc_t *crop_low_desc, const mkldnn_memory_desc_t *crop_high_desc,
+        const mkldnn_memory_desc_t *input_scale_desc, const mkldnn_memory_desc_t *input_shift_desc,
+        const mkldnn_memory_desc_t *output_scale_desc, const mkldnn_memory_desc_t *output_shift_desc,
+        const mkldnn_memory_desc_t *dst_desc);
 
 /** @} */
 
@@ -1959,13 +2013,13 @@ unsigned int MKLDNN_API mkldnn_get_cache_size(int level, int per_core);
  *      because it returns mkldnn_status_t for error handling.
  *      XERBLA is not supported: no error message will be printed
  *      in case of incorrect parameters. */
-mkldnn_status_t MKLDNN_API mkldnn_sgemm(const char *transa, const char *transb,
-        const int *M, const int *N, const int *K,
-        const float *alpha, const float *A, const int *lda,
-        const float *B, const int *ldb,
-        const float *beta, float *C, const int *ldc);
+mkldnn_status_t MKLDNN_API mkldnn_sgemm(char transa, char transb,
+        int M, int N, int K,
+        float alpha, const float *A, int lda,
+        const float *B, int ldb,
+        float beta, float* C, int ldc);
 
-/** gemm_s8u8s32 and gemm_s8s8s32 perform a matrix-matrix multiplication
+/** gemm_u8s8s32 and gemm_s8s8s32 perform a matrix-matrix multiplication
  * operation and add the result to a scalar-matrix product. For the final
  * result, a vector is added to each row or column of the output matrix.
  * The operation is defined as:
@@ -1991,42 +2045,17 @@ mkldnn_status_t MKLDNN_API mkldnn_sgemm(const char *transa, const char *transb,
  *      because it returns mkldnn_status_t for error handling.
  *      XERBLA is not supported: no error message will be printed
  *      in case of incorrect parameters. */
-mkldnn_status_t MKLDNN_API mkldnn_gemm_s8u8s32(const char *transa,
-        const char *transb, const char *offsetc, const int *M, const int *N,
-        const int *K, const float *alpha, const int8_t *A, const int *lda,
-        const int8_t *ao, const uint8_t *B, const int *ldb, const int8_t *bo,
-        const float *beta, int32_t *c, const int *ldc, const int32_t *co);
+mkldnn_status_t MKLDNN_API mkldnn_gemm_u8s8s32(char transa,
+        char transb, char offsetc, int M, int N,
+        int K, float alpha, const uint8_t *A, int lda,
+        uint8_t ao, const int8_t *B, int ldb, int8_t bo,
+        float beta, int32_t *c, int ldc, const int32_t *co);
 
-mkldnn_status_t MKLDNN_API mkldnn_gemm_s8s8s32(const char *transa,
-        const char *transb, const char *offsetc, const int *M, const int *N,
-        const int *K, const float *alpha, const int8_t *A, const int *lda,
-        const int8_t *ao, const int8_t *B, const int *ldb, const int8_t *bo,
-        const float *beta, int32_t *c, const int *ldc, const int32_t *co);
-
-/** gemm_bf16bf16f32 performs a matrix-matrix multiplication operation defined
- * as
- *
- * C := alpha*op( A )*op( B ) + beta*C
- *
- * where
- *  - op( X ) is one of op( X ) = X or op( X ) = X**T,
- *  - alpha and beta are scalars,
- *  - A, B and C are matrices, with op( A ) an m by k matrix, op( B ) a k by n
- *    matrix and C an m by n matrix.
- *
- * The matrices are assumed to be stored in column-major order (the elements
- * in a matrix columns are contiguous in memory).
- *
- * @note
- *      The API is different from the standard BLAS routine
- *      because it returns mkldnn_status_t for error handling.
- *      XERBLA is not supported: no error message will be printed
- *      in case of incorrect parameters. */
-mkldnn_status_t MKLDNN_API mkldnn_gemm_bf16bf16f32(const char *transa,
-        const char *transb, const int *M, const int *N, const int *K,
-        const float *alpha, const mkldnn_bfloat16_t *A, const int *lda,
-        const mkldnn_bfloat16_t *B, const int *ldb, const float *beta,
-        float *c, const int *ldc);
+mkldnn_status_t MKLDNN_API mkldnn_gemm_s8s8s32(char transa,
+        char transb, char offsetc, int M, int N,
+        int K, float alpha, const int8_t *A, int lda,
+        int8_t ao, const int8_t *B, int ldb, int8_t bo,
+        float beta, int32_t *c, int ldc, const int32_t *co);
 
 /** @} */
 

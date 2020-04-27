@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2019 Intel Corporation
+// Copyright (C) 2018-2020 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -24,29 +24,12 @@ public:
     void createPrimitive() override;
     bool created() const override;
 
-    mkldnn::algorithm getAlgorithm() {
-        if (!initialized)
-            initValues();
-        return algorithm;
-    }
-
-    bool isWithBiases() {
-        if (!initialized)
-            initValues();
-        return withBiases;
-    }
-
-    bool isBroadcast() {
-        if (!initialized)
-            initValues();
-        return broadcast;
-    }
+    mkldnn::algorithm getAlgorithm() const { return algorithm; }
+    bool isWithBiases() const { return withBiases; }
+    bool isBroadcast() const { return broadcast; }
 
 private:
-    void initValues();
-    bool initialized = false;
-
-    static Register<MKLDNNDepthwiseNode> reg;
+    void init() override;
 
     mkldnn::algorithm algorithm = mkldnn::algorithm::depthwise_scale_shift;
     size_t realWeightSize = 0;

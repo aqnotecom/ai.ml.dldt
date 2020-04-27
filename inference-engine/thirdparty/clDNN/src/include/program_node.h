@@ -21,6 +21,7 @@
 #include "api/primitive.hpp"
 #include "api/activation.hpp"
 #include "internal_primitive.h"
+#include "kernel_selector_helper.h"
 
 #include "meta_utils.h"
 #include <vector>
@@ -34,6 +35,7 @@ struct program_impl;
 class reorder_inputs;
 class graph_initializations;
 class prepare_quantization;
+class pre_replace_deconv;
 
 template <class T>
 struct typed_program_node;
@@ -46,7 +48,7 @@ class xml_composite;
 
 
 struct fused_primitive_desc {
-    std::shared_ptr<const primitive> prim;
+    std::shared_ptr<program_node> node;
     size_t dep_start_idx;
     std::vector<primitive_id> deps;
     activation_func activation;
@@ -69,6 +71,7 @@ struct program_node {
     friend struct program_impl;                     // to be removed when possible
     friend class compile_graph;                     // to be removed when possible
     friend class graph_initializations;             // to be removed when possible
+    friend class pre_replace_deconv;                // to be removed when possible
     friend class prepare_primitive_fusing;          // to be removed when possible
     friend class prepare_quantization;              // to be removed when possible
     friend class prepare_conv_eltw_fusing;          // to be removed when possible
@@ -88,6 +91,7 @@ struct program_node {
 public:
     virtual const primitive_id& id() const { return desc->id; }
     virtual primitive_type_id type() const { return desc->type; }
+    virtual std::shared_ptr<kernel_selector::fuse_params> get_fuse_params() const { return nullptr; }
 
     template <class PType>
     bool is_type() const {
@@ -284,11 +288,11 @@ public:
         return reused_memory_color;
     }
 
-    virtual void add_fused_primitive(fused_primitive_desc& desc) {
-        fused_prims.push_back(desc);
+    void add_fused_primitive(fused_primitive_desc& d) {
+        fused_prims.push_back(d);
     }
 
-    virtual void add_fused_primitives(std::vector<fused_primitive_desc> descs) {
+    void add_fused_primitives(std::vector<fused_primitive_desc> descs) {
         fused_prims.insert(fused_prims.end(), descs.begin(), descs.end());
     }
 
@@ -305,11 +309,13 @@ public:
     bool has_fused_primitives() const { return !get_fused_primitives().empty(); }
 
     layout get_fused_output_layout() const {
-        auto fused_prims = get_fused_primitives();
-        if (fused_prims.empty())
+        auto fp = get_fused_primitives();
+        if (fp.empty())
             return layout(data_types::f32, format::bfyx, tensor());
-        return fused_prims.back().output_layout;
+        return fp.back().output_layout;
     }
+
+    bool need_lockable_memory() const;
 
 protected:
     std::shared_ptr<primitive> desc;
@@ -363,6 +369,7 @@ struct api_typed_program_node_base : public program_node {
                   "PType should name a non-const, non-volatile type derived from cldnn::primitive but not from "
                   "cldnn::internal_primitive");
     friend class cldnn::graph_initializations;
+    friend class cldnn::pre_replace_deconv;
     friend class cldnn::prepare_quantization;
     friend struct cldnn::program_impl;
     friend class cldnn::reorder_inputs;

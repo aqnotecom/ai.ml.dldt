@@ -1,10 +1,9 @@
-// Copyright (C) 2018-2019 Intel Corporation
+// Copyright (C) 2018-2020 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
 #include "mkldnn_infer_request.h"
 #include "mkldnn_extension_utils.h"
-#include "mkldnn_streams.h"
 #include <vector>
 #include <string>
 #include <map>
@@ -12,13 +11,37 @@
 #include <nodes/mkldnn_concat_node.h>
 #include <nodes/mkldnn_split_node.h>
 #include <ie_compound_blob.h>
+#include "inference_engine.hpp"
+#include "mkldnn_exec_network.h"
 
-MKLDNNPlugin::MKLDNNInferRequest::MKLDNNInferRequest(InferenceEngine::InputsDataMap networkInputs,
-                                                     InferenceEngine::OutputsDataMap networkOutputs)
-        : InferRequestInternal(networkInputs, networkOutputs) {}
+MKLDNNPlugin::MKLDNNInferRequest::MKLDNNInferRequest(InferenceEngine::InputsDataMap     networkInputs,
+                                                     InferenceEngine::OutputsDataMap    networkOutputs,
+                                                     MKLDNNExecNetwork::Ptr             execNetwork_)
+: InferRequestInternal(networkInputs, networkOutputs)
+, execNetwork(execNetwork_) {
+    auto id = (execNetwork->_numRequests)++;
+    profilingTask = InferenceEngine::ProfilingTask{"MKLDNN_INFER_" + execNetwork->_name + "_" + std::to_string(id)};
 
+    if (execNetwork->_graphs.size() == 0)
+        THROW_IE_EXCEPTION << "No graph was found";
+    graph = execNetwork->_graphs.begin()->get();
+    for (const auto& it : _networkInputs) {
+        InferenceEngine::Blob::Ptr blob;
+        MKLDNNInferRequest::GetBlob(it.first.c_str(), blob);
+    }
+    // Allocate all output blobs
+    for (const auto& it : _networkOutputs) {
+        InferenceEngine::Blob::Ptr blob;
+        MKLDNNInferRequest::GetBlob(it.first.c_str(), blob);
+    }
+}
 
-template <typename T> void MKLDNNPlugin::MKLDNNInferRequest::pushInput(const std::string& inputName, InferenceEngine::Blob::Ptr& inputBlob) {
+MKLDNNPlugin::MKLDNNInferRequest::~MKLDNNInferRequest() {
+    --(execNetwork->_numRequests);
+}
+
+template <typename T>
+void MKLDNNPlugin::MKLDNNInferRequest::pushInput(const std::string& inputName, InferenceEngine::Blob::Ptr& inputBlob) {
     InferenceEngine::TBlob<T> *in_f = dynamic_cast<InferenceEngine::TBlob<T> *>(inputBlob.get());
 
     if (in_f == nullptr) {
@@ -33,22 +56,20 @@ template <typename T> void MKLDNNPlugin::MKLDNNInferRequest::pushInput(const std
 }
 
 void MKLDNNPlugin::MKLDNNInferRequest::InferImpl() {
-    IE_PROFILING_AUTO_SCOPE(MKLDNN_INFER)
-    if (!graph || !graph->IsReady()) {
-        THROW_IE_EXCEPTION << "Network not loaded.";
-    }
-    auto infer = [this] {
-        // execute input pre-processing.
+    IE_PROFILING_AUTO_SCOPE_TASK(profilingTask)
+    graph = execNetwork->_graphs.local().get();
+    {
         execDataPreprocessing(_inputs);
 
         changeDefaultPtr();
+
         // need to retain converted blobs until infer finish
         std::vector<InferenceEngine::Blob::Ptr> convertedInputs;
         for (auto input : _inputs) {
             if (!_networkInputs[input.first]) {
                 THROW_IE_EXCEPTION <<
-                                   "input blobs map contains not registered during IInferencePlugin::LoadNetwork blob with name "
-                                   << input.first;
+                                    "input blobs map contains not registered during IInferencePlugin::LoadNetwork blob with name "
+                                    << input.first;
             }
 
             InferenceEngine::Blob::Ptr iconv;
@@ -66,28 +87,32 @@ void MKLDNNPlugin::MKLDNNInferRequest::InferImpl() {
                 case InferenceEngine::Precision::U16:
                     // U16 is unsupported by mkldnn, so here we convert the blob and send FP32
                     iconv = InferenceEngine::make_shared_blob<float>({InferenceEngine::Precision::FP32,
-                                                                      input.second->getTensorDesc().getDims(),
-                                                                      input.second->getTensorDesc().getLayout()});
+                                                                        input.second->getTensorDesc().getDims(),
+                                                                        input.second->getTensorDesc().getLayout()});
                     convertedInputs.push_back(iconv);
                     iconv->allocate();
                     in_f = dynamic_cast<InferenceEngine::TBlob<float> *>(iconv.get());
                     if (in_f == nullptr)
                         THROW_IE_EXCEPTION << "Cannot get TBlob";
+                    IE_SUPPRESS_DEPRECATED_START
                     InferenceEngine::copyToFloat<uint16_t>(in_f->data(), input.second.get());
+                    IE_SUPPRESS_DEPRECATED_END
                     pushInput<float>(input.first, iconv);
                     break;
                 case InferenceEngine::Precision::I16:
                     if (graph->hasMeanImageFor(input.first)) {
                         // If a mean image exists, we convert the blob and send FP32
                         iconv = InferenceEngine::make_shared_blob<float>({InferenceEngine::Precision::FP32,
-                                                                          input.second->getTensorDesc().getDims(),
-                                                                          input.second->getTensorDesc().getLayout()});
+                                                                            input.second->getTensorDesc().getDims(),
+                                                                            input.second->getTensorDesc().getLayout()});
                         convertedInputs.push_back(iconv);
                         iconv->allocate();
                         in_f = dynamic_cast<InferenceEngine::TBlob<float> *>(iconv.get());
                         if (in_f == nullptr)
                             THROW_IE_EXCEPTION << "Cannot get TBlob";
+                        IE_SUPPRESS_DEPRECATED_START
                         InferenceEngine::copyToFloat<int16_t>(in_f->data(), input.second.get());
+                        IE_SUPPRESS_DEPRECATED_END
                         pushInput<float>(input.first, iconv);
                     } else {
                         // Instead we can send I16 directly
@@ -98,14 +123,16 @@ void MKLDNNPlugin::MKLDNNInferRequest::InferImpl() {
                     if (graph->hasMeanImageFor(input.first)) {
                         // If a mean image exists, we convert the blob and send FP32
                         iconv = InferenceEngine::make_shared_blob<float>({InferenceEngine::Precision::FP32,
-                                                                          input.second->getTensorDesc().getDims(),
-                                                                          input.second->getTensorDesc().getLayout()});
+                                                                            input.second->getTensorDesc().getDims(),
+                                                                            input.second->getTensorDesc().getLayout()});
                         convertedInputs.push_back(iconv);
                         iconv->allocate();
                         in_f = dynamic_cast<InferenceEngine::TBlob<float> *>(iconv.get());
                         if (in_f == nullptr)
                             THROW_IE_EXCEPTION << "Cannot get TBlob";
+                        IE_SUPPRESS_DEPRECATED_START
                         InferenceEngine::copyToFloat<uint8_t>(in_f->data(), input.second.get());
+                        IE_SUPPRESS_DEPRECATED_END
                         pushInput<float>(input.first, iconv);
                     } else {
                         // Instead we can send I8 directly
@@ -116,16 +143,11 @@ void MKLDNNPlugin::MKLDNNInferRequest::InferImpl() {
                     THROW_IE_EXCEPTION << "Unsupported input precision " << input.second->getTensorDesc().getPrecision();
             }
         }
-        graph->Infer(m_curBatch);
-        graph->PullOutputData(_outputs);
-    };
-#if (IE_THREAD == IE_THREAD_TBB || IE_THREAD == IE_THREAD_TBB_AUTO)
-    auto_scope_observing observer(graph->ptrObserver);
-    // a TBB arena is made "this" for Infer call via executing lambda for the arena
-    graph->ptrArena->execute([&] { infer(); });
-#else
-    infer();
-#endif
+    }
+
+    graph->Infer(m_curBatch);
+
+    graph->PullOutputData(_outputs);
 }
 
 void MKLDNNPlugin::MKLDNNInferRequest::GetPerformanceCounts(
@@ -136,6 +158,7 @@ void MKLDNNPlugin::MKLDNNInferRequest::GetPerformanceCounts(
 }
 
 void MKLDNNPlugin::MKLDNNInferRequest::GetBlob(const char *name, InferenceEngine::Blob::Ptr &data) {
+    IE_PROFILING_AUTO_SCOPE(GetBlob)
     if (!graph || !graph->IsReady())
         THROW_IE_EXCEPTION << "Graph is not ready!";
 
@@ -146,7 +169,7 @@ void MKLDNNPlugin::MKLDNNInferRequest::GetBlob(const char *name, InferenceEngine
         // ROI blob is returned only if it was set previously.
         auto it = _preProcData.find(name);
         if (it != _preProcData.end()) {
-            data = it->second.getRoiBlob();
+            data = it->second->getRoiBlob();
             return;
         }
 
@@ -178,7 +201,6 @@ void MKLDNNPlugin::MKLDNNInferRequest::GetBlob(const char *name, InferenceEngine
     }
     blobs.clear();
     graph->getOutputBlobs(blobs);
-
     if (blobs.find(name) != blobs.end()) {
         if (_outputs.find(name) != _outputs.end()) {
             data = _outputs[name];
@@ -200,12 +222,14 @@ void MKLDNNPlugin::MKLDNNInferRequest::GetBlob(const char *name, InferenceEngine
 }
 
 void MKLDNNPlugin::MKLDNNInferRequest::SetBlob(const char *name, const InferenceEngine::Blob::Ptr &data) {
+    IE_PROFILING_AUTO_SCOPE(SetBlob)
     if (name == nullptr) {
         THROW_IE_EXCEPTION << NOT_FOUND_str + "Failed to set blob with empty name";
     }
+
     if (!data)
         THROW_IE_EXCEPTION << NOT_ALLOCATED_str << "Failed to set empty blob with name: \'" << name << "\'";
-    const bool compoundBlobPassed = data->is<CompoundBlob>();
+    const bool compoundBlobPassed = data->is<InferenceEngine::CompoundBlob>();
     if (!compoundBlobPassed && data->buffer() == nullptr)
         THROW_IE_EXCEPTION << "Input data was not allocated. Input name: \'" << name << "\'";
     if (data->size() == 0) {
@@ -228,12 +252,17 @@ void MKLDNNPlugin::MKLDNNInferRequest::SetBlob(const char *name, const Inference
         }
 
         if (preProcRequired) {
-            PreProcessData::isApplicable(data, _inputs[name]);
+            if (_preProcData.find(name) == _preProcData.end()) {
+                _preProcData.emplace(name, InferenceEngine::CreatePreprocDataHelper());
+            }
+            _preProcData[name]->isApplicable(data, _inputs[name]);
             // Stores the given blob as ROI blob. It will be used to fill in network input during
             // pre-processing
-            _preProcData[name].setRoiBlob(data);
+            _preProcData[name]->setRoiBlob(data);
         } else {
-            size_t inputSize = InferenceEngine::details::product(foundInput->getTensorDesc().getDims());
+            size_t inputSize = foundInput->getTensorDesc().getLayout() != InferenceEngine::Layout::SCALAR
+                ? InferenceEngine::details::product(foundInput->getTensorDesc().getDims())
+                : 1;
             if (dataSize != inputSize) {
                 THROW_IE_EXCEPTION << "Input blob size is not equal network input size ("
                                    << dataSize << "!=" << inputSize << ").";
@@ -256,7 +285,9 @@ void MKLDNNPlugin::MKLDNNInferRequest::SetBlob(const char *name, const Inference
             THROW_IE_EXCEPTION << NOT_IMPLEMENTED_str
                                << "cannot set compound blob: supported only for input pre-processing";
         }
-        size_t outputSize = InferenceEngine::details::product(foundOutput->getDims());
+        size_t outputSize = foundOutput->getTensorDesc().getLayout() != InferenceEngine::Layout::SCALAR
+            ? InferenceEngine::details::product(foundOutput->getDims())
+            : 1;
         if (dataSize != outputSize) {
             THROW_IE_EXCEPTION << "Output blob size is not equal network output size ("
                                << dataSize << "!=" << outputSize << ").";
@@ -294,13 +325,17 @@ void MKLDNNPlugin::MKLDNNInferRequest::changeDefaultPtr() {
                 auto& child = input->second->getChildEdgeAt(i)->getChild();
                 if (child->isConstant())
                     canBeInPlace = false;
+#if defined(COMPILED_CPU_MKLDNN_CONCAT_NODE)
                 auto* concat = dynamic_cast<MKLDNNConcatNode *>(child.get());
                 if (canBeInPlace && concat && concat->isOptimized())
                     canBeInPlace = false;
+#endif
                 // Cannot be in-place before split because split is using different ptrs without offsets
+#if defined(COMPILED_CPU_MKLDNN_SPLIT_NODE)
                 auto* split = dynamic_cast<MKLDNNSplitNode *>(child.get());
                 if (canBeInPlace && split)
                     canBeInPlace = false;
+#endif
 
                 if (child->isInplace())
                     canBeInPlace = false;
@@ -353,22 +388,6 @@ void MKLDNNPlugin::MKLDNNInferRequest::changeDefaultPtr() {
     }
 }
 
-void MKLDNNPlugin::MKLDNNInferRequest::SetGraph(const MKLDNNPlugin::MKLDNNGraph::Ptr &graph) {
-    this->graph = graph;
-
-    InferenceEngine::BlobMap blobs;
-    this->graph->getInputBlobs(blobs);
-    for (const auto& it : blobs) {
-        InferenceEngine::Blob::Ptr blob;
-        GetBlob(it.first.c_str(), blob);
-    }
-    blobs.clear();
-    this->graph->getOutputBlobs(blobs);
-    for (const auto& it : blobs) {
-        InferenceEngine::Blob::Ptr blob;
-        GetBlob(it.first.c_str(), blob);
-    }
-}
 
 void MKLDNNPlugin::MKLDNNInferRequest::SetBatch(int new_batch) {
     if (!graph->getProperty().enableDynamicBatch)

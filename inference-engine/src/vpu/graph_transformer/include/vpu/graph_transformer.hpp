@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2019 Intel Corporation
+// Copyright (C) 2018-2020 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -15,6 +15,7 @@
 #include <utility>
 
 #include <ie_icnn_network.hpp>
+#include <details/caseless.hpp>
 
 #include <vpu/utils/enums.hpp>
 #include <vpu/utils/perf_report.hpp>
@@ -30,74 +31,90 @@ namespace ie = InferenceEngine;
 //
 
 VPU_DECLARE_ENUM(Platform,
-    UNKNOWN = 0,
     MYRIAD_2 = 2450,
-    MYRIAD_X = 2480
-)
-
-// Must be synchronized with MvTensor
-VPU_DECLARE_ENUM(ExecutionMode,
-    AUTO = -1,
-    SINGLE = 0,
-    PARALLEL = 1
-)
-
-VPU_DECLARE_ENUM(ComputeLayout,
-    AUTO,
-    NCHW,
-    NHWC,
-    NCDHW,
-    NDHWC
+    MYRIAD_X = 2480,
 )
 
 struct CompilationConfig final {
     //
-    // Main flags
+    // Compilation options
     //
 
     int numSHAVEs = -1;
     int numCMXSlices = -1;
+    int numExecutors = -1;
 
     bool hwOptimization = true;
-
-    bool hwAdaptiveMode = true;
+    bool hwExtraSplit = false;
 
     bool ignoreIRStatistic = false;
 
-    std::string networkConfig;
+    std::string irWithVpuScalesDir;
 
     std::string customLayers;
 
-    //
-    // Debug flags
-    //
-
-    ComputeLayout forceLayout = ComputeLayout::AUTO;
-
     bool detectBatch = true;
-
-    std::string hwWhiteList;
-    std::string hwBlackList;
-
-    std::string noneLayers;
-
-    bool ignoreUnknownLayers = false;
 
     Optional<bool> copyOptimization;
     Optional<bool> injectSwOps;
     Optional<bool> packDataInCmx;
-
     bool mergeHwPoolToConv = true;
+    bool hwDilation = false;
+    bool forceDeprecatedCnnConversion = false;
+
+    std::map<std::string, std::vector<int>> ioStrides;
 
     //
-    // Deprecated flags
+    // Debug options
+    //
+
+    ie::details::caseless_set<std::string> hwWhiteList;
+    ie::details::caseless_set<std::string> hwBlackList;
+
+    bool hwDisabled(const std::string& layerName) const {
+        if (!hwWhiteList.empty()) {
+            return hwWhiteList.count(layerName) == 0;
+        }
+
+        if (!hwBlackList.empty()) {
+            return hwBlackList.count(layerName) != 0;
+        }
+
+        return false;
+    }
+
+    ie::details::caseless_set<std::string> noneLayers;
+
+    bool skipAllLayers() const {
+        if (noneLayers.size() == 1) {
+            const auto& val = *noneLayers.begin();
+            return val == "*";
+        }
+        return false;
+    }
+
+    bool skipLayerType(const std::string& layerType) const {
+        return noneLayers.count(layerType) != 0;
+    }
+    bool ignoreUnknownLayers = false;
+
+    std::string dumpInternalGraphFileName;
+    std::string dumpInternalGraphDirectory;
+    bool dumpAllPasses;
+
+    bool disableReorder = false;  // TODO: rename to enableReorder and switch logic.
+    bool enablePermuteMerging = true;
+    bool enableReplWithSCRelu = false;
+    bool enableReplaceWithReduceMean = true;
+    bool enableTensorIteratorUnrolling = false;
+    bool forcePureTensorIterator = false;
+
+    //
+    // Deprecated options
     //
 
     float inputScale = 1.0f;
     float inputBias = 0.0f;
-
-    bool hwDilation = false;
-    std::map<std::string, std::vector<int>> ioStrides;
 };
 
 
@@ -135,6 +152,7 @@ struct CompiledGraph final {
 
     std::uint32_t numShaves = 0;
     std::uint32_t numSlices = 0;
+    std::uint32_t numExecutors = 0;
 };
 
 //
@@ -142,13 +160,13 @@ struct CompiledGraph final {
 //
 
 CompiledGraph::Ptr compileNetwork(
-        const ie::ICNNNetwork& network,
+        ie::ICNNNetwork& network,
         Platform platform,
         const CompilationConfig& config,
         const Logger::Ptr& log);
 
 CompiledGraph::Ptr compileSubNetwork(
-        const ie::ICNNNetwork& network,
+        ie::ICNNNetwork& network,
         const CompilationConfig& subConfig);
 
 //

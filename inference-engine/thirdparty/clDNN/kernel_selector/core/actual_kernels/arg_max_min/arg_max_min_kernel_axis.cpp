@@ -34,6 +34,7 @@ ParamsKey ArgMaxMinKernelAxis::GetSupportedKey() const {
     k.EnableInputDataType(Datatype::F16);
     k.EnableInputDataType(Datatype::F32);
     k.EnableInputDataType(Datatype::INT8);
+    k.EnableInputDataType(Datatype::INT32);
     k.EnableAllOutputDataType();
     k.EnableInputLayout(DataLayout::bfyx);
     k.EnableOutputLayout(DataLayout::bfyx);
@@ -82,7 +83,7 @@ KernelsData ArgMaxMinKernelAxis::GetKernelsData(const Params& params, const opti
         kernel.arguments.push_back({ArgumentDescriptor::Types::INPUT, 1});
     }
 
-    kd.estimatedTime = FORCE_PRIORITY_9;
+    kd.estimatedTime = FORCE_PRIORITY_3;
 
     return {kd};
 }

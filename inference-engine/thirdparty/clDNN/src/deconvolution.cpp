@@ -38,13 +38,13 @@ layout deconvolution_inst::calc_output_layout(deconvolution_node const& node) {
 
     auto input_offset = desc->input_offset;
     auto strd = desc->stride;
-    auto split = desc->weights.size();
+    auto group = desc->groups;
 
-    auto number_of_features = weights_layout.size.batch[0] * static_cast<int32_t>(split);
+    auto number_of_features = weights_layout.size.batch[0] * static_cast<int32_t>(group);
 
     // Deconvolution is used for convolution backward pass, but number of features will differ then
     if (desc->gradient())
-        number_of_features = weights_layout.size.feature[0] * static_cast<int32_t>(split);
+        number_of_features = weights_layout.size.feature[0] * static_cast<int32_t>(group);
 
     if (desc->with_output_size) {
         CLDNN_ERROR_LESS_OR_EQUAL_THAN(node.id(),
@@ -78,7 +78,7 @@ layout deconvolution_inst::calc_output_layout(deconvolution_node const& node) {
     auto filter_size = weights_layout.size;
 
     int32_t off_factor = 2;
-    int32_t spatial_dims = cldnn::format::traits(input_layout.format).spatial_num;
+    size_t spatial_dims = cldnn::format::traits(input_layout.format).spatial_num;
     CLDNN_ERROR_GREATER_THAN(node.id(),
                                    "number of spatial dimensions",
                                    spatial_dims,

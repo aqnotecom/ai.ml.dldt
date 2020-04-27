@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2019 Intel Corporation
+// Copyright (C) 2018-2020 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -7,7 +7,7 @@
 #include <memory>
 #include <vector>
 
-#include "inference_engine.hpp"
+#include "ie_layouts.h"
 #include "mkldnn_dims.h"
 #include <mkldnn.hpp>
 #include <string>
@@ -109,6 +109,7 @@ public:
     void FillZero();
 
     static bool IsPlainFormat(mkldnn::memory::format format);
+    static bool IsGroupedFormat(mkldnn::memory::format format);
     static mkldnn::memory::format GetPlainFormat(mkldnn::memory::dims dims);
     static InferenceEngine::Layout GetPlainLayout(mkldnn::memory::dims dims);
     static bool isConsistant(mkldnn::memory::dims dims, mkldnn::memory::format format);

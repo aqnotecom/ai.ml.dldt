@@ -38,7 +38,7 @@ class primitive_inst;
 
 struct network_impl : public refcounted_obj<network_impl> {
 public:
-    network_impl(const program_impl& program, uint16_t stream_id, bool is_internal = false);
+    explicit network_impl(const program_impl& program, uint16_t stream_id, bool is_internal = false);
     network_impl(engine_impl& engine,
                  const topology_impl& topo,
                  const build_options& options = build_options(),
@@ -48,12 +48,14 @@ public:
                  const std::set<std::shared_ptr<program_node>>& nodes,
                  const build_options& options,
                  bool is_internal);
+    ~network_impl();
 
     const program_impl& get_program() const { return *_program; }
     engine_impl& get_engine() const { return _program->get_engine(); }
 
     void reset_execution(bool wait = true);
     void set_input_data(const primitive_id& id, memory_impl& data);
+    void set_output_memory(const primitive_id& id, memory_impl& mem);
 
     void set_learning_rate(const float lr);
     float get_learning_rate();
@@ -66,6 +68,7 @@ public:
     }
 
     std::vector<primitive_id> get_output_ids() const;
+    std::vector<primitive_id> get_input_ids() const;
     std::vector<primitive_id> get_executed_primitive_ids() const;
     std::vector<primitive_id> get_all_primitive_ids() const;
     std::vector<primitive_id> get_all_primitive_org_ids() const;
@@ -86,6 +89,8 @@ public:
     uint32_t get_id() const { return net_id; }
     void build_exec_order();
     bool is_internal() const { return _internal; }
+    bool is_primary_stream();
+    bool is_secondary_stream();
 
 private:
     uint32_t net_id = 0;
@@ -103,6 +108,7 @@ private:
     std::unordered_map<primitive_id, event_impl::ptr> _events;
 
     void allocate_primitive_instance(program_node const& node);
+    void transfer_memory_to_device(std::shared_ptr<primitive_inst> instance, program_node const& node);
     void allocate_mutable_data_for_streams(std::vector<std::shared_ptr<program_node>>& mutable_data_nodes);
     void add_to_exec_order(const primitive_id& id);
     std::shared_ptr<primitive_inst> find_in_internal_networks(const primitive_id& id);

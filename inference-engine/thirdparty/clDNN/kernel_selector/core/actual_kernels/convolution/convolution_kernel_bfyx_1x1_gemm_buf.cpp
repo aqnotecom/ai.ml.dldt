@@ -1,4 +1,4 @@
-﻿// Copyright (c) 2016 Intel Corporation
+﻿// Copyright (c) 2016-2020 Intel Corporation
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -42,14 +42,14 @@ ConvolutionKernelBase::DispatchData ConvolutionKernel_bfyx_1x1_gemm_buf::SetDefa
     auto b = out.Batch().v;
 
     kd.gws0 = Align(f, 16);
-    kd.gws1 = static_cast<size_t>(std::ceil(x * y / 16.0f));
+    kd.gws1 = CeilDiv(x * y, 16);
     kd.gws2 = b;
 
     kd.lws0 = 16;
     kd.lws1 = 1;
     kd.lws2 = 1;
 
-    kd.effiency = FORCE_PRIORITY_1;
+    kd.efficiency = FORCE_PRIORITY_1;
 
     return kd;
 }
@@ -66,8 +66,9 @@ bool ConvolutionKernel_bfyx_1x1_gemm_buf::Validate(const Params& p, const option
     const bool bPad = input.X().pad.Total() != 0 || input.Y().pad.Total() != 0 || input.Feature().pad.Total() != 0 || input.Batch().pad.Total() != 0;
     const bool bFilterSize = params.filterSize.x != 1 || params.filterSize.y != 1;
     const bool bStride = params.stride.x != 1 || params.stride.y != 1;
+    const bool bIFMSize = input.Feature().v % 32 != 0;
 
-    if (bPad || bFilterSize || bStride) {
+    if (bPad || bFilterSize || bStride || bIFMSize) {
         return false;
     }
 

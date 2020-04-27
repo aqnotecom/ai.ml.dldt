@@ -1,17 +1,17 @@
-// Copyright (C) 2018-2019 Intel Corporation
+// Copyright (C) 2018-2020 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
 #pragma once
 
 #include "ie_parallel.hpp"
+#include "ie_icnn_network.hpp"
 #include "config.h"
 #include "mkldnn_memory.h"
 #include "mean_image.h"
 #include "mkldnn_node.h"
 #include "mkldnn_edge.h"
-#include "mkldnn_streams.h"
-
+#include "threading/ie_thread_local.hpp"
 #include <map>
 #include <string>
 #include <vector>
@@ -81,35 +81,7 @@ public:
     void RemoveDroppedNodes();
     void RemoveDroppedEdges();
     void DropNode(const MKLDNNNodePtr& node);
-
-    void CreateArena(int threads_per_stream) {
-        #if IE_THREAD == IE_THREAD_OMP
-        omp_set_num_threads(threads_per_stream);
-        #elif(IE_THREAD == IE_THREAD_TBB || IE_THREAD == IE_THREAD_TBB_AUTO)
-        ptrArena = std::unique_ptr<tbb::task_arena>(new tbb::task_arena(threads_per_stream));
-        #endif
-    }
-
-    void CreateObserver(int _stream_id, int _threads_per_stream, int _pinning_step = 1) {
-        #if (IE_THREAD == IE_THREAD_TBB || IE_THREAD == IE_THREAD_TBB_AUTO)
-        ptrObserver
-                = std::unique_ptr<tbb::task_scheduler_observer>(
-                new pinning_observer(*ptrArena.get(), _stream_id, _threads_per_stream, _pinning_step));
-        #else
-        cpu_set_t *process_mask = nullptr;
-        int ncpus = 0;
-        get_process_mask(ncpus, process_mask);
-            #if IE_THREAD == IE_THREAD_OMP
-            #pragma omp parallel for
-                    for (int thread_index = 0; thread_index < _threads_per_stream; thread_index++) {
-                        pin_thread_to_vacant_core(_stream_id * _threads_per_stream + thread_index, 1, ncpus, process_mask);
-                    }
-            #elif IE_THREAD == IE_THREAD_SEQ
-            pin_thread_to_vacant_core(_stream_id * _threads_per_stream, 1, ncpus, process_mask);
-            #endif
-        CPU_FREE(process_mask);
-        #endif
-    }
+    void DropDWConvNode(const MKLDNNNodePtr& node);
 
     InferenceEngine::ICNNNetwork::Ptr dump() const;
 
@@ -118,9 +90,10 @@ public:
 
     void ResetInferCount() { infer_count = 0; }
 
+    void SortTopologically();
+
 protected:
     void VisitNode(MKLDNNNodePtr node, std::vector<MKLDNNNodePtr>& sortedNodes);
-    void SortTopologically();
 
     void ForgetGraphData() {
         status = NotReady;
@@ -151,16 +124,13 @@ protected:
     std::map<std::string, MeanImage> _meanImages;
     std::string _name;
 
-    #if (IE_THREAD == IE_THREAD_TBB || IE_THREAD == IE_THREAD_TBB_AUTO)
-    std::unique_ptr<tbb::task_arena> ptrArena;
-    std::unique_ptr<tbb::task_scheduler_observer> ptrObserver;
-    #endif
     mkldnn::engine eng;
 
-    void Replicate(const ICNNNetwork &network, const MKLDNNExtensionManager::Ptr& extMgr);
-    void Replicate(const TensorIterator::Body &subgraph, const MKLDNNExtensionManager::Ptr& extMgr);
+    void Replicate(const InferenceEngine::ICNNNetwork &network, const MKLDNNExtensionManager::Ptr& extMgr);
+    void Replicate(const InferenceEngine::TensorIterator::Body &subgraph, const MKLDNNExtensionManager::Ptr& extMgr);
     void InitGraph();
     void InitNodes();
+    void InitDescriptors();
     void InitEdges();
     void Allocate();
     void AllocateWithReuse();

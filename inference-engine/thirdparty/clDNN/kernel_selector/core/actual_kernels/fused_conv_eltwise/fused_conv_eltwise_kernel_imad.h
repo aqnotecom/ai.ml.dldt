@@ -35,8 +35,9 @@ protected:
     bool Validate(const Params& params, const optional_params& options) const override;
     JitConstants GetJitConstants(const fused_conv_eltwise_params& params, const DispatchData& kd) const override;
     DispatchData SetDefault(const fused_conv_eltwise_params& arg, int autoTuneIndex = -1) const override;
-    std::vector<WeightsLayout> GetSupportedWeightLayouts(const fused_conv_eltwise_params&) const override {
-        return {WeightsLayout::os_is_yx_osv16_isv4};
+    bool NeedPaddedInput() const override { return true; }
+    WeightsLayout GetPreferreddWeightsLayout(const fused_conv_eltwise_params &) const override {
+        return WeightsLayout::os_is_yx_osv16_isv4;
     }
 
     size_t m_FilterSizeX = 1;

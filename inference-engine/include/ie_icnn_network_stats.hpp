@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2019 Intel Corporation
+// Copyright (C) 2018-2020 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -9,33 +9,39 @@
  */
 #pragma once
 
-#include <string>
-#include <memory>
 #include <limits>
-#include <vector>
 #include <map>
+#include <memory>
+#include <string>
+#include <vector>
+
 #include "details/ie_irelease.hpp"
 
 namespace InferenceEngine {
 
 class NetworkNodeStats;
+
 /**
  * @brief A shared pointer to the NetworkNodeStats object
  */
 using NetworkNodeStatsPtr = std::shared_ptr<NetworkNodeStats>;
+
 /**
  * @brief A smart pointer to the NetworkNodeStats object
  */
 using NetworkNodeStatsWeakPtr = std::weak_ptr<NetworkNodeStats>;
+
 /**
  * @brief A map of pairs: name of a layer and related statistics
  */
 using NetworkStatsMap = std::map<std::string, NetworkNodeStatsPtr>;
+
 /**
+ * @deprecated Migrate to IR v10 and use quantization approach with FakeQuantize
  * @class ICNNNetworkStats
  * @brief This is the interface to describe the NN topology scoring statistics
  */
-class ICNNNetworkStats : public details::IRelease {
+class INFERENCE_ENGINE_INTERNAL("Migrate to IR v10 and use quantization approach with FakeQuantize") ICNNNetworkStats : public details::IRelease {
 public:
     /**
      * @brief Sets a map which contains layers with statistics
@@ -61,15 +67,16 @@ public:
 };
 
 /**
+ * @deprecated Migrate to IR v10 and use quantization approach with FakeQuantize
  * @class NetworkNodeStats
  * @brief This class implements a container which stores statistics for a layer
  */
-class NetworkNodeStats {
+class INFERENCE_ENGINE_INTERNAL("Migrate to IR v10 and use quantization approach with FakeQuantize") NetworkNodeStats {
 public:
     /**
      * @brief The constructor which creates NetworkNodeStats object
      */
-    NetworkNodeStats() { }
+    NetworkNodeStats() {}
     /**
      * @brief The constructor which creates NetworkNodeStats object with filled statistics
      *
@@ -95,6 +102,5 @@ public:
      */
     std::vector<float> _maxOutputs;
 };
-
 
 }  // namespace InferenceEngine

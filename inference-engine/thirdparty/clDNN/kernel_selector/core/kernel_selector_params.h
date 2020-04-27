@@ -24,6 +24,8 @@
 #include "tensor_type.h"
 #include "document.h"
 #include <vector>
+#include <utility>
+#include <bitset>
 
 namespace kernel_selector {
 using DataTensor = Tensor::DataTensor;
@@ -31,8 +33,24 @@ using WeightsTensor = Tensor::WeightsTensor;
 using DataLayout = Tensor::DataLayout;
 using WeightsLayout = Tensor::WeightsLayout;
 using MultiDataTensor = std::vector<DataTensor>;
+using DataBitField = std::bitset<DataLayout::DataLayoutCount>;
+using WightsBitField = std::bitset<WeightsLayout::WeightsLayoutCount>;
 
 class JitConstants;
+class TuningCache;
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// fuse_params
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+struct fuse_params {
+    virtual ~fuse_params() {}
+
+    KernelType GetType() const { return kType; }
+protected:
+    explicit fuse_params(KernelType kt) : kType(kt) {}
+    KernelType kType;
+};
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // ParamsKey
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -69,6 +87,9 @@ public:
                 uint32_t momentum : 1;
                 uint32_t quantization : 1;
                 uint32_t output_calibration : 1;
+                uint32_t sym_quantization : 1;
+                uint32_t asym_w_quantization : 1;
+                uint32_t asym_d_quantization : 1;
 
                 union dedicated_t {
                     struct lookt_t {
@@ -159,9 +180,10 @@ public:
                         uint32_t oneKernel : 1;
                     } concat;
                     struct upsample_t {
-                        uint32_t nearest : 1;
-                        uint32_t bilinear : 1;
-                    } upsample;
+                        uint32_t nearest_neighbor : 1;
+                        uint32_t caffe_bilinear_interp : 1;
+                        uint32_t bilinear_interp : 1;
+                    } resample;
                     struct reorder_t {
                         uint32_t winograd : 1;
                     } reorder;
@@ -198,6 +220,7 @@ public:
                     } fused_conv_eltw;
                     struct quantize_t {
                         uint32_t packed_binary_output : 1;
+                        uint32_t scale_shift_opt : 1;
                     } quantize;
                 } dedicated;
             } val;
@@ -235,22 +258,10 @@ public:
         DataTypesKey outputType;
         DataTypesKey inputWeightsType;
         DataTypesKey outputWeightsType;
-        uint32_t inputLayout;
-        uint32_t outputLayout;
-        uint64_t weightsInputLayout;
-        uint64_t weightsOutputLayout;
-
-        static_assert(std::numeric_limits<decltype(weightsInputLayout)>::digits >= WeightsLayout::WeightsLayoutCount,
-                      "Not enough bits in weightsInputLayout to store WeightLayout bitfield");
-
-        static_assert(std::numeric_limits<decltype(weightsOutputLayout)>::digits >= WeightsLayout::WeightsLayoutCount,
-                      "Not enough bits in weightsOutputLayout to store WeightLayout bitfield");
-
-        static_assert(std::numeric_limits<decltype(inputLayout)>::digits >= DataLayout::DataLayoutCount,
-                      "Not enough bits in inputLayout to store DataLayout bitfield");
-
-        static_assert(std::numeric_limits<decltype(outputLayout)>::digits >= DataLayout::DataLayoutCount,
-                      "Not enough bits in outputLayout to store DataLayout bitfield");
+        DataBitField inputLayout;
+        DataBitField outputLayout;
+        WightsBitField weightsInputLayout;
+        WightsBitField weightsOutputLayout;
     };
 
     void EnableInputDataType(Datatype dt);
@@ -264,14 +275,18 @@ public:
     void EnableFP16Emulation() { key.restrict.val.FP16Emulation = 1; }
     void EnableDifferentTypes() { key.restrict.val.different_types = 1; }
     void EnableDifferentInputWeightsTypes() { key.restrict.val.different_input_weights_types = 1; }
-    void EnableInputLayout(DataLayout l) { key.inputLayout |= (1 << l); }
-    void EnableAllInputLayout() { key.inputLayout = -1; }
-    void EnableOutputLayout(DataLayout l) { key.outputLayout |= (1 << l); }
-    void EnableAllOutputLayout() { key.outputLayout = -1; }
-    void EnableInputWeightsLayout(WeightsLayout l) { key.weightsInputLayout |= ((uint64_t)1 << l); }
-    void EnableAllInputWeightsLayout() { key.weightsInputLayout = -1; }
-    void EnableOutputWeightsLayout(WeightsLayout l) { key.weightsOutputLayout |= ((uint64_t)1 << l); }
-    void EnableAllOutputWeightsLayout() { key.weightsOutputLayout = -1; }
+    void EnableInputLayout(DataLayout l) { key.inputLayout.set(static_cast<size_t>(l)); }
+    void EnableAllInputLayout() { key.inputLayout.set(); }
+    void EnableOutputLayout(DataLayout l) { key.outputLayout.set(static_cast<size_t>(l)); }
+    void EnableAllOutputLayout() { key.outputLayout.set(); }
+    void EnableInputWeightsLayout(WeightsLayout l) {
+        key.weightsInputLayout.set(static_cast<size_t>(l));
+    }
+    void EnableAllInputWeightsLayout() { key.weightsInputLayout.set(); }
+    void EnableOutputWeightsLayout(WeightsLayout l) {
+        key.weightsOutputLayout.set(static_cast<size_t>(l));
+    }
+    void EnableAllOutputWeightsLayout() { key.weightsOutputLayout.set(); }
     void EnableTensorOffset() { key.restrict.val.offset = 1; }
     void EnableTensorPitches() { key.restrict.val.pitches = 1; }
     void EnableBatching() { key.restrict.val.batching = 1; }
@@ -292,6 +307,7 @@ public:
     void EnablePoolKernelDividerMode(KernelDividerMode m);
     void EnablePoolType(PoolType t);
     void EnablePoolRemainder(PoolRemainder r);
+    void EnableQuantization(QuantizationType q);
     void EnablePositionSensitivePooling() { key.restrict.val.dedicated.pooling.position_sensitive = 1; }
     void EnableSplitSupport() { key.restrict.val.dedicated.conv.split = 1; }
     void EnableDilation() { key.restrict.val.dedicated.conv.dilation = 1; }
@@ -316,11 +332,12 @@ public:
     void EnableFusedConvEltwEltwiseStride();
 
     void EnableQuantizePackedBinaryOutput() { key.restrict.val.dedicated.quantize.packed_binary_output = 1; }
+    void EnableQuantizeScaleShiftOpt() { key.restrict.val.dedicated.quantize.scale_shift_opt = 1; }
 
     void EnableWinogradReorder() { key.restrict.val.dedicated.reorder.winograd = 1; }
     void EnableSoftmaxDim(SoftmaxDim d);
     void EnableConcatAxis(ConcatAxis a);
-    void EnableUpSamplingSampleType(SampleType a);
+    void EnableReampleType(ResampleType a);
     void EnableEltwiseStride();
     void EnableEltwiseBroadcast() { key.restrict.val.dedicated.eltwise.broadcast = 1; }
     void EnableEltwiseInputsCalibration() { key.restrict.val.dedicated.eltwise.inputs_calibration = 1; }
@@ -371,7 +388,7 @@ struct EngineInfo {
     std::string deviceId = "";
     std::string driverVersion = "";
     std::string hostVersion = "";
-    std::shared_ptr<rapidjson::Document> deviceCache;
+    std::shared_ptr<TuningCache> deviceCache;
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -389,9 +406,11 @@ protected:
 
 public:
     std::string layerID;
+    std::string forceImplementation;
     EngineInfo engineInfo;
 
     virtual std::string to_string() const;
+    virtual std::string to_cache_string_v2() const;
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -414,31 +433,134 @@ struct base_activation_params {
 };
 
 struct FusedOpsConfiguration {
+    enum class LoadType {
+        LT_UNALIGNED = 0,
+        LT_ALIGNED_READ = 1
+    };
+
+    enum class BoundaryCheck {
+        DISABLED = 0,
+        ENABLED = 1
+    };
+
+    enum class IndexType {
+        TENSOR_COORD = 0,
+        LINEAR_OFFSET = 1
+    };
+
+    // Optional suffix that is added to each macro in the configuration.
     std::string suffix;
-    std::vector<std::string> bfyx_idx_order;
+    // Indices to load additional data for a fused op.
+    std::vector<std::string> bfzyx_idx_order;
+    // Name of the input variable for the first fused op.
     std::string input_var_name;
+    // Data type of the input
+    Datatype input_dt;
+    // Data type vector size of the input
     size_t vec_size;
-    bool aligned_load;
-    bool typed_activation;
-    bool safe_load;
-    bool simple_offset;
+    // Represents a channel in the input tensor that is loaded to the input variable
+    Tensor::DataChannelName vec_axis;
+    // Sets used load type - aligned or unaligned. Aligned load requires specific extensions and adjusted indices.
+    LoadType load_type;
+    // Defines if safe index function should be used for offset calculation
+    BoundaryCheck boundary_check;
+    // Defines how to treat indices array
+    IndexType index_type;
+    // Defines outer loops channels where fused op is called.
+    std::vector<Tensor::DataChannelName> loop_axes;
 
     FusedOpsConfiguration(std::string suffix,
-                          std::vector<std::string> bfyx_idx_order,
+                          std::vector<std::string> bfzyx_idx_order,
                           std::string input_var_name,
+                          Datatype input_dt,
                           size_t vec_size = 1,
-                          bool aligned_load = false,
-                          bool typed_activation = false,
-                          bool safe_load = true,
-                          bool simple_offset = false)
+                          LoadType load_type = LoadType::LT_UNALIGNED,
+                          BoundaryCheck boundary_check = BoundaryCheck::ENABLED,
+                          IndexType index_type = IndexType::TENSOR_COORD,
+                          Tensor::DataChannelName vec_axis = Tensor::DataChannelName::COUNT,
+                          std::vector<Tensor::DataChannelName> loop_axes = {})
       : suffix(suffix)
-      , bfyx_idx_order(bfyx_idx_order)
+      , bfzyx_idx_order(bfzyx_idx_order)
       , input_var_name(input_var_name)
+      , input_dt(input_dt)
       , vec_size(vec_size)
-      , aligned_load(aligned_load)
-      , typed_activation(typed_activation)
-      , safe_load(safe_load)
-      , simple_offset(simple_offset) { }
+      , vec_axis(vec_axis)
+      , load_type(load_type)
+      , boundary_check(boundary_check)
+      , index_type(index_type)
+      , loop_axes(loop_axes) { }
+
+    FusedOpsConfiguration& SetVectorSize(size_t val) { vec_size = val; return *this; }
+    FusedOpsConfiguration& SetLoadType(LoadType val) { load_type = val; return *this; }
+    FusedOpsConfiguration& SetBoundaryCheck(BoundaryCheck val) { boundary_check = val; return *this; }
+    FusedOpsConfiguration& SetIndexType(IndexType val) { index_type = val; return *this; }
+    FusedOpsConfiguration& SetVectorAxis(Tensor::DataChannelName val) { vec_axis = val; return *this; }
+    FusedOpsConfiguration& SetLoopAxes(std::vector<Tensor::DataChannelName> val) { loop_axes = std::move(val); return *this; }
+};
+
+// Instance of fused_operation_desc is added to fused_ops vector if a node has been fused to current one using program_impl::fuse_nodes
+// method. In order to process fused ops following modifications should be done in a kernel:
+// option 1 - using common generator:
+//     - create FusedOpsConfiguration object that contains configuration for common code generator.
+//       Multiple objects can be created if a kernel uses different data types at the same time. E.g. kernels that contains scalar and
+//       vector branches that are chosen in runtime. To handle this case, create 2 configurations with different suffixes, like
+//       "_SCALAR" and "_VEC" and then use generated macros accordingly.
+//     - add jit constants returned by KernelBase::MakeFusedOpsJitConstants method to the kernel's constants.
+//     - insert generated macros in the ocl code:
+//       in kernel declaration:
+//         #if HAS_FUSED_OPS_DECLS
+//           FUSED_OPS_DECLS,
+//         #endif
+//       in kernel body:
+//         #if HAS_FUSED_OPS
+//           FUSED_OPS<OPTIONAL_SUFFIX>;
+//           <SOME_VARIABLE> = FUSED_OPS_RESULT<OPTIONAL_SUFFIX>;
+//         #endif
+//   In this case common generator creates set of definitions for each op which are called sequentially in FUSED_OP<OPTIONAL_SUFFIX>
+//   macro. Example:
+//     #define FUSED_OPS
+//       FUSED_OP0_LOAD_VEC
+//       FUSED_OP0_ACTION_VEC
+//       FUSED_OP1_LOAD_VEC
+//       FUSED_OP1_ACTION_VEC
+//     #define FUSED_OP0_LOAD_VEC
+//       MAKE_VECTOR_TYPE(FUSED_OP_0_INPUT0_TYPE,2) activation0_data0 = UNIT_BLOCK_READ(activation0_input0,
+//                                                                      FUSED_OP_0_INPUT0_GET_INDEX_SAFE(0,(f_block*16),0,0));
+//     #define FUSED_OP0_ACTION_VEC
+//       float2 dst_0 = dst;
+//       dst_0 = ACTIVATION_FUSED_OP0_VEC(dst_0, ACTIVATION_PARAMS_FUSED_OP0_VEC);
+//     #define FUSED_OP1_LOAD_VEC
+//       MAKE_VECTOR_TYPE(FUSED_OP_1_INPUT0_TYPE,2) eltwise1_data0 = UNIT_BLOCK_READ2(eltwise1_input0,
+//                                                                   FUSED_OP_1_INPUT0_GET_INDEX_SAFE(0,(f_block*16),y,x));
+//     #define FUSED_OP1_ACTION_VEC
+//       float2 dst_0_2 = convert_float2(eltwise1_data0) + convert_float2(dst_0);
+//     #define FUSED_OPS_RESULT_VEC dst_0_2
+// option 2 - using custom generator in a kernel. It can be used if performance is not optimal in the common one or to handle
+//            some difficult cases that can't be unified. Custom processing of fused ops can be written absolutely independently
+//            in a kernel, but to make it easier set of helper functions exist:
+//     - KernelBase::MakeFusedOpsDeclsJitConstants that creates arguments for kernel declaration and macro for all tensors used in
+//       a fused op (requires FusedOpsConfiguration instance).
+//     - fused_operation_desc contains a bunch of methods to generate variable/pointer names, type conversions, data loads
+//  If you need an example of custom code generation for fused ops, check BinaryConvolutionKernelGeneric::GetFusedPrimitivesJitConstants
+//  method in binary_convolution_kernel_generic.cpp.
+struct fused_operation_desc {
+    std::shared_ptr<fuse_params> op_params;
+    size_t dep_idx_start;
+    size_t dep_size;
+    MultiDataTensor tensors;
+    DataTensor output_tensor;
+    size_t op_id;
+
+    // Helper functions for operation generation
+    KernelType GetType() const { return op_params->GetType(); }
+    template<typename T>
+    std::shared_ptr<T> GetOpParams() const {
+        auto p = std::dynamic_pointer_cast<T>(op_params);
+        if (!p)
+            throw std::runtime_error("Invalid dynamic cast of fused operation parameters");
+
+        return p;
+    }
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -447,119 +569,15 @@ struct FusedOpsConfiguration {
 struct base_params : public Params {
     virtual ~base_params() {}
 
-    // Instance of fused_operation_desc is added to fused_ops vector if a node has been fused to current one using program_impl::fuse_nodes
-    // method. In order to process fused ops following modifications should be done in a kernel:
-    // option 1 - using common generator:
-    //     - create FusedOpsConfiguration object that contains configuration for common code generator.
-    //       Multiple objects can be created if a kernel uses different data types at the same time. E.g. kernels that contains scalar and
-    //       vector branches that are chosen in runtime. To handle this case, create 2 configurations with different suffixes, like
-    //       "_SCALAR" and "_VEC" and then use generated macros accordingly.
-    //     - add jit constants returned by KernelBase::MakeFusedOpsJitConstants method to the kernel's constants.
-    //     - insert generated macros in the ocl code:
-    //       in kernel declaration:
-    //         #if HAS_FUSED_OPS_DECLS
-    //           FUSED_OPS_DECLS,
-    //         #endif
-    //       in kernel body:
-    //         #if HAS_FUSED_OPS
-    //           FUSED_OPS<OPTIONAL_SUFFIX>;
-    //           <SOME_VARIABLE> = FINAL_NAME<OPTIONAL_SUFFIX>;
-    //         #endif
-    //   In this case common generator creates set of definitions for each op which are called sequentially in FUSED_OP<OPTIONAL_SUFFIX>
-    //   macro. Example:
-    //     #define FUSED_OPS
-    //       FUSED_OP0_LOAD_VEC
-    //       FUSED_OP0_ACTION_VEC
-    //       FUSED_OP1_LOAD_VEC
-    //       FUSED_OP1_ACTION_VEC
-    //     #define FUSED_OP0_LOAD_VEC
-    //       MAKE_VECTOR_TYPE(FUSED_OP_0_INPUT0_TYPE,2) activation0_data0 = UNIT_BLOCK_READ(activation0_input0,
-    //                                                                      FUSED_OP_0_INPUT0_GET_INDEX_SAFE(0,(f_block*16),0,0));
-    //     #define FUSED_OP0_ACTION_VEC
-    //       float2 dst_0 = dst;
-    //       dst_0 = ACTIVATION_FUSED_OP0_VEC(dst_0, ACTIVATION_PARAMS_FUSED_OP0_VEC);
-    //     #define FUSED_OP1_LOAD_VEC
-    //       MAKE_VECTOR_TYPE(FUSED_OP_1_INPUT0_TYPE,2) eltwise1_data0 = UNIT_BLOCK_READ2(eltwise1_input0,
-    //                                                                   FUSED_OP_1_INPUT0_GET_INDEX_SAFE(0,(f_block*16),y,x));
-    //     #define FUSED_OP1_ACTION_VEC
-    //       float2 dst_0_2 = convert_float2(eltwise1_data0) + convert_float2(dst_0);
-    //     #define FINAL_NAME_VEC dst_0_2
-    // option 2 - using custom generator in a kernel. It can be used if performance is not optimal in the common one or to handle
-    //            some difficult cases that can't be unified. Custom processing of fused ops can be written absolutely independently
-    //            in a kernel, but to make it easier set of helper functions exist:
-    //     - KernelBase::MakeFusedOpsDeclsJitConstants that creates arguments for kernel declaration and macro for all tensors used in
-    //       a fused op (requires FusedOpsConfiguration instance).
-    //     - fused_operation_desc contains a bunch of methods to generate variable/pointer names, type conversions, data loads
-    //  If you need an example of custom code generation for fused ops, check BinaryConvolutionKernelGeneric::GetFusedPrimitivesJitConstants
-    //  method in binary_convolution_kernel_generic.cpp.
-    struct fused_operation_desc {
-        enum class Type : uint8_t {
-            ELTWISE = 0,
-            SCALE = 1,
-            QUANTIZE = 2,
-            ACTIVATION = 3,
-            UNDEFINED
-        };
-
-        struct idx_desc {
-            std::string b;
-            std::string f;
-            std::string z;
-            std::string y;
-            std::string x;
-            size_t dims;
-            explicit idx_desc(std::vector<std::string> idx) : b(""), f(""), z(""), y(""), x(""), dims(0) {
-                dims = idx.size();
-                switch (dims) {
-                    case 1: f = idx[0]; break;
-                    case 2: b = idx[0]; f = idx[1]; break;
-                    case 3: b = idx[0]; f = idx[1]; y = idx[2]; break;
-                    case 4: b = idx[0]; f = idx[1]; y = idx[2]; x = idx[3]; break;
-                    case 5: b = idx[0]; f = idx[1]; z = idx[2]; y = idx[3]; x = idx[4]; break;
-                    default: throw std::runtime_error("More than 5 dimenstions is not supported in fused op generator");
-                }
-            }
-        };
-
-        Type type;
-        size_t dep_idx_start;
-        size_t dep_size;
-        MultiDataTensor tensors;
-        DataTensor output_tensor;
-        base_activation_params activation;
-        size_t op_id;
-
-        JitConstants MakeFusedTensorJitConstants(const FusedOpsConfiguration& conf) const;
-        JitConstants MakeInputDeclsJitConstants(const FusedOpsConfiguration& conf) const;
-        JitConstants MakeLoadJitConstants(const FusedOpsConfiguration& conf) const;
-        JitConstants MakeOpJitConstants(const FusedOpsConfiguration& conf, std::string in_var, std::string& out_var) const;
-
-        // Helper functions for operation generation
-        std::string GetTypeStr() const;
-        std::string GetInputTensorName(size_t input_id) const;
-        std::string GetOutputTensorName() const;
-        std::string GetInputTypeName(size_t input_id, size_t vec_size) const;
-        std::string GetJitLoad(const FusedOpsConfiguration& conf, size_t input_id,
-                               bool reuse_index = false, std::string reused_idx = "") const;
-        std::string GetIdx(size_t input_id, idx_desc idx, bool should_be_safe) const;
-        std::string GetInputPtrName(size_t input_id) const;
-        std::string GetInputVarName(size_t input_id) const;
-        std::string GetOutputVarName(std::string input_var_name) const;
-        std::string ConvertToOutputType(std::string var, size_t vec_size = 1) const;
-        std::string ConvertToOutputTypeSat(std::string var, size_t vec_size = 1) const;
-        std::string GetOutputType(size_t vec_size = 1) const;
-    };
-
-    base_activation_params activation;
-
     std::vector<base_activation_params> activations;
     std::vector<fused_operation_desc> fused_ops = {};
     MultiDataTensor inputs;
     DataTensor output;
     bool gradient = false;
 
-    virtual std::string to_string() const;
-    virtual ParamsKey GetParamsKey() const;
+    std::string to_string() const override;
+    std::string to_cache_string_v2() const override;
+    ParamsKey GetParamsKey() const override;
 
 protected:
     explicit base_params(KernelType kt) : Params(kt, ""), inputs(1) {}
@@ -604,4 +622,5 @@ protected:
     explicit optional_params(KernelType kt) : kType(kt) {}
     KernelType kType;
 };
+
 }  // namespace kernel_selector

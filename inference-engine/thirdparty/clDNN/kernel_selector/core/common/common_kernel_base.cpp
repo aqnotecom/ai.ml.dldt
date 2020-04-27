@@ -149,7 +149,7 @@ Arguments common_kernel_base::GetArgsDesc(uint32_t num_of_input,
 std::shared_ptr<KernelString> common_kernel_base::GetKernelString(const std::string& name,
                                                                   const std::string& jit,
                                                                   const std::string& entry_point,
-                                                                  const EngineInfo& engine_info,
+                                                                  const EngineInfo& /*engine_info*/,
                                                                   const std::string& exe_mode) const {
     std::shared_ptr<KernelString> kernel_string = std::make_shared<KernelString>();
 
@@ -159,10 +159,6 @@ std::shared_ptr<KernelString> common_kernel_base::GetKernelString(const std::str
         kernel_string->str = codes[0];
         kernel_string->jit = jit;
         kernel_string->options = exe_mode + " -cl-mad-enable";
-        if (engine_info.bIMMADSupport)
-            kernel_string->options += " -DMMAD_SUPPORTED=1";
-        if (engine_info.bIMADSupport)
-            kernel_string->options += " -DIMAD_SUPPORTED=1";
         kernel_string->entry_point = entry_point;
         kernel_string->batch_compilation = true;
     }
@@ -194,6 +190,16 @@ static void Check_RunInfoData(const std::string& kernelName, const kernel_select
     }
 }
 
+uint32_t common_kernel_base::GetFusedPrimitiveInputsCount(const Params &params) const {
+    auto p = dynamic_cast<const base_params&>(params);
+    uint32_t fused_deps_total = 0;
+    for (auto fused_op : p.fused_ops) {
+        fused_deps_total += static_cast<uint32_t>(fused_op.dep_size);
+    }
+
+    return fused_deps_total;
+}
+
 void common_kernel_base::FillCLKernelData(clKernelData& kernel,
                                           const CommonDispatchData& runInfo,
                                           const EngineInfo& engine_info,
@@ -204,14 +210,12 @@ void common_kernel_base::FillCLKernelData(clKernelData& kernel,
                                           bool weights,
                                           bool bias,
                                           int number_of_inputs,
-                                          bool quantization,
-                                          bool calibration,
-                                          int number_of_inputs_for_fused_prims) const {
+                                          uint32_t number_of_inputs_for_fused_prims) const {
     Check_RunInfoData(kernelMapName, runInfo);
     kernel.workGroups.global = {runInfo.gws0, runInfo.gws1, runInfo.gws2};
     kernel.workGroups.local = {runInfo.lws0, runInfo.lws1, runInfo.lws2};
     kernel.kernelString = GetKernelString(kernelMapName, jit, entryPoint, engine_info, exeMode);
     kernel.arguments =
-        GetArgsDesc(number_of_inputs, weights, bias, quantization, calibration, number_of_inputs_for_fused_prims);
+        GetArgsDesc(number_of_inputs, weights, bias, false, false, number_of_inputs_for_fused_prims);
 }
 }  // namespace kernel_selector

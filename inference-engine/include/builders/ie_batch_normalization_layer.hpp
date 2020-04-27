@@ -1,6 +1,10 @@
-// Copyright (C) 2018-2019 Intel Corporation
+// Copyright (C) 2018-2020 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
+
+/**
+ * @file
+ */
 
 #pragma once
 
@@ -12,9 +16,11 @@ namespace InferenceEngine {
 namespace Builder {
 
 /**
+ * @deprecated Use ngraph API instead.
  * @brief The class represents a builder for BatchNormalization layer
  */
-class INFERENCE_ENGINE_API_CLASS(BatchNormalizationLayer): public LayerDecorator {
+IE_SUPPRESS_DEPRECATED_START
+class INFERENCE_ENGINE_NN_BUILDER_API_CLASS(BatchNormalizationLayer): public LayerDecorator {
 public:
     /**
      * @brief The constructor creates a builder with the name
@@ -48,7 +54,7 @@ public:
      * @param port Port with shapes
      * @return reference to layer builder
      */
-    BatchNormalizationLayer& setPort(const Port &port);
+    BatchNormalizationLayer& setPort(const Port& port);
 
     /**
      * @brief Returns epsilon
@@ -62,6 +68,7 @@ public:
      */
     BatchNormalizationLayer& setEpsilon(float eps);
 };
+IE_SUPPRESS_DEPRECATED_END
 
 }  // namespace Builder
 }  // namespace InferenceEngine

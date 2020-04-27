@@ -1,4 +1,4 @@
-﻿// Copyright (c) 2018-2019 Intel Corporation
+﻿// Copyright (c) 2018-2020 Intel Corporation
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -30,7 +30,6 @@ ParamsKey EltwiseKernel_fs_bs_yx_bsv4_fsv32::GetSupportedKey() const {
     k.EnableTensorPitches();
     k.EnableBatching();
     k.EnableInt8Quantization();
-    k.EnableOutputCalibration();
     k.EnableEltwiseStride();
     return k;
 }
@@ -46,7 +45,7 @@ EltwiseKernelBase::DispatchData EltwiseKernel_fs_bs_yx_bsv4_fsv32::SetDefault(co
     kd.lws1 = 1;
     kd.lws2 = 8;
 
-    kd.effiency = FORCE_PRIORITY_3;
+    kd.efficiency = FORCE_PRIORITY_3;
     return kd;
 }
 

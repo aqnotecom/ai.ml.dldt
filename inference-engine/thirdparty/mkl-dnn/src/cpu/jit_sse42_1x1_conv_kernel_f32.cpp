@@ -208,6 +208,7 @@ void jit_sse42_1x1_conv_kernel_f32::generate_reduce_loop(
 
         int eltwise_inj_idx = 0;
         int depthwise_inj_idx = 0;
+        int quantization_inj_idx = 0;
         const auto &p = attr_.post_ops_;
 
         int end_idx = jcp.with_dw_conv ? p.find(primitive_kind::convolution) : p.len_;
@@ -237,6 +238,35 @@ void jit_sse42_1x1_conv_kernel_f32::generate_reduce_loop(
                 }
 
                 depthwise_inj_idx++;
+            } else if (post_op.is_quantization()) {
+                quantization_injectors[quantization_inj_idx]->init_crop_ptrs(reg_oc_off);
+                for (int j = 0; j < load_loop_blk; ++j) {
+                    for (int k = 0; k < 2; k++) {
+                        int s_idx = reg_accum(j, 0, k).getIdx();
+                        quantization_injectors[quantization_inj_idx]->compute_crop(s_idx, s_idx + ur,
+                                (j * jcp.oc_block + k * jcp.oc_block / 2) * sizeof(float));
+                    }
+                }
+
+                quantization_injectors[quantization_inj_idx]->init_input_scale_shift_ptrs(reg_oc_off);
+                for (int j = 0; j < load_loop_blk; ++j) {
+                    for (int k = 0; k < 2; k++) {
+                        int s_idx = reg_accum(j, 0, k).getIdx();
+                        quantization_injectors[quantization_inj_idx]->compute_input_scale_shift(s_idx, s_idx + ur,
+                                (j * jcp.oc_block + k * jcp.oc_block / 2) * sizeof(float), true);
+                    }
+                }
+
+                quantization_injectors[quantization_inj_idx]->init_output_scale_shift_ptrs(reg_oc_off);
+                for (int j = 0; j < load_loop_blk; ++j) {
+                    for (int k = 0; k < 2; k++) {
+                        int s_idx = reg_accum(j, 0, k).getIdx();
+                        quantization_injectors[quantization_inj_idx]->compute_output_scale_shift(s_idx, s_idx + ur,
+                                (j * jcp.oc_block + k * jcp.oc_block / 2) * sizeof(float));
+                    }
+                }
+
+                quantization_inj_idx++;
             }
         }
 
@@ -385,6 +415,12 @@ void jit_sse42_1x1_conv_kernel_f32::generate()
                     this,
                     post_op.depthwise.alg
             ));
+        } else if (post_op.is_quantization()) {
+            quantization_injectors.push_back(new jit_uni_quantization_injector_f32<sse42>(
+                    this,
+                    post_op,
+                    xmm_d_weights, xmm_d_bias, reg_d_weights, reg_d_bias
+            ));
         }
     }
 
@@ -502,7 +538,8 @@ bool jit_sse42_1x1_conv_kernel_f32::post_ops_ok(
 
         int end_idx = with_dw_conv ? dw_conv_idx : p.len_;
         for (int i = 0; i < end_idx; i++) {
-            ok = ok && utils::one_of(p.entry_[i].kind, primitive_kind::sum, primitive_kind::eltwise, primitive_kind::depthwise);
+            ok = ok && utils::one_of(p.entry_[i].kind, primitive_kind::sum, primitive_kind::eltwise, primitive_kind::depthwise,
+                    primitive_kind::quantization);
         }
         return ok;
     };
@@ -603,12 +640,11 @@ status_t jit_sse42_1x1_conv_kernel_f32::init_conf(jit_1x1_conv_conf_t &jcp,
 
     jcp.ic_block = jcp.oc_block = simd_w*2;
 
-    args_ok = true
-        && jcp.oc % jcp.oc_block == 0
-        && jcp.ic % jcp.ic_block == 0
-        && jcp.t_pad == 0 && jcp.l_pad == 0
-        && jcp.stride_w == 1 && jcp.stride_h == 1 // TODO: support some strides
-        && jcp.kh == 1 && jcp.kw == 1;
+    args_ok = true && jcp.oc % jcp.oc_block == 0 && jcp.ic % jcp.ic_block == 0
+            && jcp.t_pad == 0 && jcp.l_pad == 0 && jcp.stride_w == 1
+            && jcp.stride_h == 1 // TODO: support some strides
+            && jcp.ow == jcp.iw && jcp.oh == jcp.ih // enforce rpad=0
+            && jcp.kh == 1 && jcp.kw == 1;
     if (!args_ok) return status::unimplemented;
 
     jcp.ur = 1;

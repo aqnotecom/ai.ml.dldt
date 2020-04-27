@@ -1,5 +1,5 @@
 """
- Copyright (c) 2019 Intel Corporation
+ Copyright (C) 2018-2020 Intel Corporation
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -32,6 +32,10 @@ def broadcastable(broadcast_from, broadcast_to):
     return np.all(np.logical_or(broadcast_from == 1, broadcast_from == broadcast_to))
 
 
+def round_half_up(n):
+    return np.floor(n + 0.5)
+
+
 class FakeQuantize(Op):
     op = 'FakeQuantize'
 
@@ -40,6 +44,7 @@ class FakeQuantize(Op):
             'type': __class__.op,
             'op': __class__.op,
             'levels': None,
+            'is_eltwise': True,
             # flag to switch between dumping FakeQuantize as statistics and keeping it as layer in IR
             'keep_in_IR': None,
             'infer': __class__.infer,
@@ -72,7 +77,7 @@ class FakeQuantize(Op):
 
         if all([node.in_node(i).has_valid('value') for i in range(5)]):
             x, input_low, input_high, output_low, output_high = \
-                [np.array(np.broadcast_to(node.value, x.value.shape)) for node in inputs]
+                [np.array(np.broadcast_to(node.value, x.value.shape), dtype=np.float32) for node in inputs]
 
             assert node.has_valid('levels')
             assert isinstance(node.levels, int)
@@ -83,9 +88,8 @@ class FakeQuantize(Op):
             middle_mask = np.logical_not(np.logical_or(underflow_mask, overflow_mask))
 
             def middle_part(x, input_low, input_high, output_low, output_high):
-                return np.round(
-                    (x - input_low) / (input_high - input_low) * (node.levels - 1)
-                ) / (node.levels - 1) * (output_high - output_low) + output_low
+                return round_half_up((x - input_low) / (input_high - input_low) * (node.levels - 1)) / \
+                    (node.levels - 1) * (output_high - output_low) + output_low
 
             output = np.zeros_like(x)
             # pylint: disable=unsupported-assignment-operation

@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2019 Intel Corporation
+// Copyright (C) 2018-2020 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -52,15 +52,20 @@ struct DeviceDesc {
         return _graphNum < _maxGraphNum;
     }
 
-    bool isSuitableForConfig(const std::shared_ptr<MyriadConfig> &config) const {
+    bool isSuitableForConfig(const MyriadConfig& config) const {
         bool isSuitableByName = true;
-        if (config->deviceName.length()) {
-            isSuitableByName = config->deviceName == _name;
+        if (!config.deviceName().empty()) {
+            isSuitableByName = config.deviceName() == _name;
         }
 
         return isSuitableByName &&
-                ((config->platform == NC_ANY_PLATFORM) || (_platform == config->platform)) &&
-                ((config->protocol == NC_ANY_PROTOCOL) || (_protocol == config->protocol));
+                ((config.platform() == NC_ANY_PLATFORM) || (_platform == config.platform())) &&
+                ((config.protocol() == NC_ANY_PROTOCOL) || (_protocol == config.protocol()));
+    }
+
+    Platform revision() const {
+        VPU_THROW_UNLESS(_platform != NC_ANY_PLATFORM, "Cannot get a revision from not booted device");
+        return _platform == NC_MYRIAD_2 ? Platform::MYRIAD_2 : Platform::MYRIAD_X;
     }
 };
 
@@ -80,7 +85,7 @@ public:
      * @brief Get myriad device
      * @return Already booted and empty device or new booted device
      */
-    DevicePtr openDevice(std::vector<DevicePtr> &devicePool, const std::shared_ptr<MyriadConfig> &config);
+    DevicePtr openDevice(std::vector<DevicePtr> &devicePool, const MyriadConfig& config);
 
     static void closeDevices(std::vector<DevicePtr> &devicePool);
 
@@ -89,7 +94,7 @@ public:
                        const std::vector<char> &graphFileContent,
                        const std::pair<const char*, size_t> &graphHeaderDesc,
                        size_t numStages,
-                       const char* networkName,
+                       const std::string & networkName,
                        int executors);
 
     void deallocateGraph(DevicePtr &device, GraphDesc &graphDesc);
@@ -99,18 +104,18 @@ public:
 
     void getResult(GraphDesc &graphDesc, void *result_data, unsigned int result_bytes);
 
-    std::string ncStatusToStr(ncGraphHandle_t *graphHandle, ncStatus_t status);
+    static std::string ncStatusToStr(ncGraphHandle_t *graphHandle, ncStatus_t status);
 
     std::vector<float> getPerfTimeInfo(ncGraphHandle_t *graphHandle);
 
     void printThrottlingStatus();
 
-    float GetThermal(const DevicePtr device);
+    static float GetThermal(const DevicePtr& device);
 
     template<typename T>
-    std::vector<T> getGraphInfo(
+    static std::vector<T> getGraphInfo(
             ncGraphHandle_t* graphHandle,
-            int graphOption,
+            ncGraphOption_t graphOption,
             int numElems) {
         std::vector<T> out(numElems);
 
@@ -129,11 +134,7 @@ private:
      * @param configProtocol Boot device with selected protocol
      */
     ncStatus_t bootNextDevice(std::vector<DevicePtr> &devicePool,
-                              const std::string& configDevName,
-                              const ncDevicePlatform_t &configPlatform,
-                              const ncDeviceProtocol_t &configProtocol,
-                              int watchdogInterval,
-                              PowerConfig powerConfig);
+                              const MyriadConfig& config);
 };
 
 typedef std::shared_ptr<MyriadExecutor> MyriadExecutorPtr;

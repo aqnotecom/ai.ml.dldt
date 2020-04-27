@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2019 Intel Corporation
+// Copyright (C) 2018-2020 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -87,6 +87,8 @@ std::shared_ptr<ICNNNetwork> dump_graph_as_ie_net(const MKLDNNGraph &graph) {
 
 void dump_graph_as_dot(const MKLDNNGraph &graph, std::ostream &out) {
     auto dump_net = dump_graph_as_ie_net(graph);
+    if (dump_net == nullptr)
+        THROW_IE_EXCEPTION << "Nullable net dump";
     InferenceEngine::saveGraphToDot(*dump_net, out, drawer_callback);
 }
 

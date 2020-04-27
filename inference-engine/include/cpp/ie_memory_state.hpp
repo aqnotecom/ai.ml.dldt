@@ -1,6 +1,10 @@
-// Copyright (C) 2018-2019 Intel Corporation
+// Copyright (C) 2018-2020 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
+
+/**
+ * @file
+ */
 
 #pragma once
 #include <string>
@@ -8,29 +12,36 @@
 namespace InferenceEngine {
 
 /**
- * @brief c++ exception based error reporting wrapper of API class IMemoryState
+ * @brief C++ exception based error reporting wrapper of API class IMemoryState
  */
 class MemoryState {
     IMemoryState::Ptr actual = nullptr;
 
- public:
+public:
     /**
      * constructs MemoryState from the initialized shared_pointer
      * @param pState Initialized shared pointer
      */
-    explicit MemoryState(IMemoryState::Ptr pState) : actual(pState) {}
+    explicit MemoryState(IMemoryState::Ptr pState): actual(pState) {
+        if (actual == nullptr) {
+            THROW_IE_EXCEPTION << "MemoryState wrapper was not initialized.";
+        }
+    }
 
     /**
-     * @brief Wraps original method
-     * IMemoryState::Reset
+     * @copybrief IMemoryState::Reset
+     *
+     * Wraps IMemoryState::Reset
      */
     void Reset() {
         CALL_STATUS_FNC_NO_ARGS(Reset);
     }
 
     /**
-     * @brief Wraps original method
-     * IMemoryState::GetName
+     * @copybrief IMemoryState::GetName
+     *
+     * Wraps IMemoryState::GetName
+     * @return A string representing a state name
      */
     std::string GetName() const {
         char name[256];
@@ -39,8 +50,10 @@ class MemoryState {
     }
 
     /**
-     * @brief Wraps original method
-     * IMemoryState::GetLastState
+     * @copybrief IMemoryState::GetLastState
+     *
+     * Wraps IMemoryState::GetLastState
+     * @return A blob representing a last state 
      */
     Blob::CPtr GetLastState() const {
         Blob::CPtr stateBlob;
@@ -49,8 +62,10 @@ class MemoryState {
     }
 
     /**
-     * @brief Wraps original method
-     * IMemoryState::SetState
+     * @copybrief IMemoryState::SetState
+     *
+     * Wraps IMemoryState::SetState
+     * @param state The current state to set
      */
     void SetState(Blob::Ptr state) {
         CALL_STATUS_FNC(SetState, state);

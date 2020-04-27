@@ -130,7 +130,7 @@ public:
         inner_product = mkldnn_inner_product,
         rnn = mkldnn_rnn,
         binary_convolution = mkldnn_binary_convolution,
-        binarization = mkldnn_binarization,
+        quantization = mkldnn_quantization,
         deformable_convolution = mkldnn_deformable_convolution,
     };
 
@@ -273,9 +273,11 @@ enum algorithm {
     eltwise_bounded_relu = mkldnn_eltwise_bounded_relu,
     eltwise_soft_relu = mkldnn_eltwise_soft_relu,
     eltwise_logistic = mkldnn_eltwise_logistic,
-    eltwise_clamp = mkldnn_eltwise_clamp,
     eltwise_exp = mkldnn_eltwise_exp,
+    eltwise_gelu = mkldnn_eltwise_gelu,
+    eltwise_clamp = mkldnn_eltwise_clamp,
     eltwise_not = mkldnn_eltwise_not,
+    eltwise_swish = mkldnn_eltwise_swish,
     depthwise_scale_shift = mkldnn_depthwise_scale_shift,
     depthwise_prelu = mkldnn_depthwise_prelu,
     lrn_across_channels = mkldnn_lrn_across_channels,
@@ -292,6 +294,8 @@ enum algorithm {
     roi_pooling_bilinear = mkldnn_roi_pooling_bilinear,
     binary_convolution_direct = mkldnn_binary_convolution_direct,
     binarization_depthwise = mkldnn_binarization_depthwise,
+    quantization_quantize_dequantize = mkldnn_quantization_quantize_dequantize,
+    quantization_quantize = mkldnn_quantization_quantize,
     deformable_convolution_direct = mkldnn_deformable_convolution_direct,
 };
 
@@ -350,7 +354,7 @@ enum query {
     inner_product_d = mkldnn_query_inner_product_d,
     rnn_d = mkldnn_query_rnn_d,
     binary_convolution_d = mkldnn_query_binary_convolution_d,
-    binarization_d = mkldnn_query_binarization_d,
+    quantization_d = mkldnn_query_quantization_d,
     deformable_convolution_d = mkldnn_query_deformable_convolution_d,
 
     input_pd = mkldnn_query_input_pd,
@@ -400,13 +404,13 @@ struct post_ops: public handle<mkldnn_post_ops_t> {
                     index));
     }
 
-    void append_sum(float scale = 1.) {
-        error::wrap_c_api(mkldnn_post_ops_append_sum(get(), scale),
+    void append_sum(float scale = 1., mkldnn_data_type_t data_type = mkldnn_f32) {
+        error::wrap_c_api(mkldnn_post_ops_append_sum(get(), scale, data_type),
                 "could not append sum");
     }
 
-    void get_params_sum(int index, float &scale) const {
-        error::wrap_c_api(mkldnn_post_ops_get_params_sum(get(), index, &scale),
+    void get_params_sum(int index, float &scale, mkldnn_data_type_t& data_type) const {
+        error::wrap_c_api(mkldnn_post_ops_get_params_sum(get(), index, &scale, &data_type),
                 "could not get sum params");
     }
 
@@ -467,6 +471,50 @@ struct post_ops: public handle<mkldnn_post_ops_t> {
                 "could not get binarization params");
         alg = static_cast<algorithm>(c_alg);
     }
+
+    void append_quantization(algorithm alg,
+            const std::vector<float> &crop_low, const std::vector<float> &crop_high,
+            const std::vector<float> &input_scale, const std::vector<float> &input_shift,
+            const std::vector<float> &output_scale, const std::vector<float> &output_shift) {
+
+        error::wrap_c_api(mkldnn_post_ops_append_quantization(get(), convert_to_c(alg), crop_low.size(), &crop_low[0], crop_high.size(), &crop_high[0],
+                input_scale.size(), &input_scale[0], input_shift.size(), &input_shift[0], output_scale.size(), &output_scale[0], output_shift.size(), &output_shift[0]),
+                          "could not append quantization");
+    }
+
+    void get_params_quantization(int index, algorithm &alg,
+            std::vector<float> &crop_low, std::vector<float> &crop_high,
+            std::vector<float> &input_scale, std::vector<float> &input_shift,
+            std::vector<float> &output_scale, std::vector<float> &output_shift) const {
+        mkldnn_alg_kind_t c_alg;
+        int crop_low_count, crop_high_count, input_scale_count, input_shift_count, output_scale_count, output_shift_count;
+        const float *crop_low_data, *crop_high_data, *input_scale_data, *input_shift_data, *output_scale_data, *output_shift_data;
+
+        error::wrap_c_api(mkldnn_post_ops_get_params_quantization(get(), index, &c_alg,
+                &crop_low_count, &crop_low_data, &crop_high_count, &crop_high_data,
+                &input_scale_count, &input_scale_data, &input_shift_count, &input_shift_data,
+                &output_scale_count, &output_scale_data, &output_shift_count, &output_shift_data),
+                          "could not get int weights zero_points");
+
+        crop_low.resize(crop_low_count);
+        for (int c = 0; c < crop_low_count; ++c)
+            crop_low[c] = crop_low_data[c];
+        crop_high.resize(crop_high_count);
+        for (int c = 0; c < crop_high_count; ++c)
+            crop_high[c] = crop_high_data[c];
+        input_scale.resize(input_scale_count);
+        for (int c = 0; c < input_scale_count; ++c)
+            input_scale[c] = input_scale_data[c];
+        input_shift.resize(input_shift_count);
+        for (int c = 0; c < input_shift_count; ++c)
+            input_shift[c] = input_shift_data[c];
+        output_scale.resize(output_scale_count);
+        for (int c = 0; c < output_scale_count; ++c)
+            output_scale[c] = output_scale_data[c];
+        output_shift.resize(output_shift_count);
+        for (int c = 0; c < output_shift_count; ++c)
+            output_shift[c] = output_shift_data[c];
+    }
 };
 
 #ifndef DOXYGEN_SHOULD_SKIP_THIS
@@ -515,6 +563,69 @@ struct primitive_attr: public handle<mkldnn_primitive_attr_t> {
         error::wrap_c_api(mkldnn_primitive_attr_set_output_scales(get(),
                     (int)scales.size(), mask, &scales[0]),
                 "could not set int output scales");
+    }
+
+    void get_output_compensations(int &mask, std::vector<int32_t> &compensations) const
+    {
+        int count, c_mask;
+        const int32_t *c_compensations;
+        error::wrap_c_api(mkldnn_primitive_attr_get_output_compensations(get(),
+                    &count, &c_mask, &c_compensations),
+                "could not get int output compensations");
+        compensations.resize(count);
+
+        mask = c_mask;
+        for (int c = 0; c < count; ++c)
+            compensations[c] = c_compensations[c];
+    }
+
+    void set_output_compensations(int mask, const std::vector<int32_t> &compensations)
+    {
+        error::wrap_c_api(mkldnn_primitive_attr_set_output_compensations(get(),
+                    (int)compensations.size(), mask, &compensations[0]),
+                "could not set int output compensations");
+    }
+
+    void get_input_zero_points(int &mask, std::vector<uint8_t> &zero_points) const
+    {
+        int count, c_mask;
+        const uint8_t *c_zero_points;
+        error::wrap_c_api(mkldnn_primitive_attr_get_input_zero_points(get(),
+                    &count, &c_mask, &c_zero_points),
+                "could not get int input zero_points");
+        zero_points.resize(count);
+
+        mask = c_mask;
+        for (int c = 0; c < count; ++c)
+            zero_points[c] = c_zero_points[c];
+    }
+
+    void set_input_zero_points(int mask, const std::vector<uint8_t> &zero_points)
+    {
+        error::wrap_c_api(mkldnn_primitive_attr_set_input_zero_points(get(),
+                    (int)zero_points.size(), mask, &zero_points[0]),
+                "could not set int input zero_points");
+    }
+
+    void get_weights_zero_points(int &mask, std::vector<int8_t> &zero_points) const
+    {
+        int count, c_mask;
+        const float *c_zero_points;
+        error::wrap_c_api(mkldnn_primitive_attr_get_weights_zero_points(get(),
+                    &count, &c_mask, &c_zero_points),
+                "could not get int weights zero_points");
+        zero_points.resize(count);
+
+        mask = c_mask;
+        for (int c = 0; c < count; ++c)
+            zero_points[c] = c_zero_points[c];
+    }
+
+    void set_weights_zero_points(int mask, const std::vector<float> &zero_points)
+    {
+        error::wrap_c_api(mkldnn_primitive_attr_set_weights_zero_points(get(),
+                    (int)zero_points.size(), mask, &zero_points[0]),
+                "could not set int weights zero_points");
     }
 
     const post_ops get_post_ops() const {
@@ -709,10 +820,12 @@ struct memory: public primitive  {
         oihw = mkldnn_oihw,
         ihwo = mkldnn_ihwo,
         hwio = mkldnn_hwio,
+        ohwi = mkldnn_ohwi,
         iohw = mkldnn_iohw,
         hwio_s8s8 = mkldnn_hwio_s8s8,
         dhwio = mkldnn_dhwio,
         oidhw = mkldnn_oidhw,
+        odhwi = mkldnn_odhwi,
         OIdhw4i4o = mkldnn_OIdhw4i4o,
         Odhwi4o = mkldnn_Odhwi4o,
         OIdhw8i8o = mkldnn_OIdhw8i8o,
@@ -742,6 +855,8 @@ struct memory: public primitive  {
         IOdhw8o16i2o = mkldnn_IOdhw8o16i2o,
         OIhw4i16o4i = mkldnn_OIhw4i16o4i,
         OIhw4i16o4i_s8s8 = mkldnn_OIhw4i16o4i_s8s8,
+        OIdhw4i16o4i = mkldnn_OIdhw4i16o4i,
+        OIdhw4i16o4i_s8s8 = mkldnn_OIdhw4i16o4i_s8s8,
         Oihw8o = mkldnn_Oihw8o,
         Oihw4o = mkldnn_Oihw4o,
         Oihw16o = mkldnn_Oihw16o,
@@ -774,6 +889,9 @@ struct memory: public primitive  {
         hwigo = mkldnn_hwigo,
         giohw = mkldnn_giohw,
         hwigo_s8s8 = mkldnn_hwigo_s8s8,
+        dhwigo_s8s8 = mkldnn_dhwigo_s8s8,
+        dhwigo = mkldnn_dhwigo,
+        dhwio_s8s8 = mkldnn_dhwio_s8s8,
         gOIdhw4i4o = mkldnn_gOIdhw4i4o,
         gOdhwi4o = mkldnn_gOdhwi4o,
         gOIdhw8i8o = mkldnn_gOIdhw8i8o,
@@ -791,6 +909,8 @@ struct memory: public primitive  {
         gIOdhw8o16i2o = mkldnn_gIOdhw8o16i2o,
         gOIhw4i16o4i = mkldnn_gOIhw4i16o4i,
         gOIhw4i16o4i_s8s8 = mkldnn_gOIhw4i16o4i_s8s8,
+        gOIdhw4i16o4i = mkldnn_gOIdhw4i16o4i,
+        gOIdhw4i16o4i_s8s8 = mkldnn_gOIdhw4i16o4i_s8s8,
         gOIhw2i8o4i = mkldnn_gOIhw2i8o4i,
         gOIhw2i8o4i_s8s8 = mkldnn_gOIhw2i8o4i_s8s8,
         gOihw8o = mkldnn_gOihw8o,
@@ -800,6 +920,7 @@ struct memory: public primitive  {
         gOhwi8o = mkldnn_gOhwi8o,
         gOhwi16o = mkldnn_gOhwi16o,
         Goihw8g = mkldnn_Goihw8g,
+        Goihw8g_s8s8 = mkldnn_Goihw8g_s8s8,
         Goiw16g = mkldnn_Goiw16g,
         Goiw16g_s8s8 = mkldnn_Goiw16g_s8s8,
         Goihw16g = mkldnn_Goihw16g,
@@ -818,6 +939,14 @@ struct memory: public primitive  {
         gOidhw4o = mkldnn_gOidhw4o,
         gOidhw16o = mkldnn_gOidhw16o,
         gOdhwi16o = mkldnn_gOdhwi16o,
+        OdhIw8o4i = mkldnn_OdhIw8o4i,
+        OdhIw8o4i_s8s8 = mkldnn_OdhIw8o4i_s8s8,
+        gOdhIw8o4i = mkldnn_gOdhIw8o4i,
+        gOdhIw8o4i_s8s8 = mkldnn_gOdhIw8o4i_s8s8,
+        Goidhw8g = mkldnn_Goidhw8g,
+        Goidhw8g_s8s8 = mkldnn_Goidhw8g_s8s8,
+        Goidhw16g = mkldnn_Goidhw16g,
+        Goidhw16g_s8s8 = mkldnn_Goidhw16g_s8s8,
         ntc = mkldnn_ntc,
         tnc = mkldnn_tnc,
         ldsnc = mkldnn_ldsnc,
@@ -3540,22 +3669,41 @@ struct binary_convolution_forward: public primitive {
 
 /// @}
 
-/// @addtogroup cpp_api_binarization Binarization
+/// @addtogroup cpp_api_quantization Quantization
 /// @{
 
-struct binarization_forward : public primitive {
+struct quantization_forward : public primitive {
     struct desc {
-        mkldnn_binarization_desc_t data;
+        mkldnn_quantization_desc_t data;
 
-        desc(prop_kind aprop_kind, algorithm alg_kind,
-             const memory::desc &src_desc, const memory::desc &weights_desc, const memory::desc &output_mask_desc,
+        desc(prop_kind aprop_kind, algorithm alg_kind, int axis,
+             const memory::desc &src_desc,
+             const memory::desc &thresholds_desc, const memory::desc &output_mask_desc,
              const memory::desc &dst_desc) {
             error::wrap_c_api(mkldnn_binarization_forward_desc_init(&data,
                                                                  mkldnn::convert_to_c(aprop_kind),
                                                                  mkldnn::convert_to_c(alg_kind),
-                                                                 &src_desc.data, &dst_desc.data,
-                                                                 &weights_desc.data, &output_mask_desc.data),
-                              "could not create a binarization forward descriptor");
+                                                                 axis,
+                                                                 &src_desc.data, &thresholds_desc.data, &output_mask_desc.data, &dst_desc.data),
+                              "could not create a quantization forward descriptor");
+        }
+
+        desc(prop_kind aprop_kind, algorithm alg_kind, int axis,
+             const memory::desc &src_desc,
+             const memory::desc &crop_low_desc, const memory::desc &crop_high_desc,
+             const memory::desc &input_scale_desc, const memory::desc &input_shift_desc,
+             const memory::desc &output_scale_desc, const memory::desc &output_shift_desc,
+             const memory::desc &dst_desc) {
+            error::wrap_c_api(mkldnn_quantization_forward_desc_init(&data,
+                                                                    mkldnn::convert_to_c(aprop_kind),
+                                                                    mkldnn::convert_to_c(alg_kind),
+                                                                    axis,
+                                                                    &src_desc.data,
+                                                                    &crop_low_desc.data, &crop_high_desc.data,
+                                                                    &input_scale_desc.data, &input_shift_desc.data,
+                                                                    &output_scale_desc.data, &output_shift_desc.data,
+                                                                    &dst_desc.data),
+                              "could not create a quantization forward descriptor");
         }
     };
 
@@ -3564,21 +3712,35 @@ struct binarization_forward : public primitive {
             mkldnn_primitive_desc_t result;
             error::wrap_c_api(mkldnn_primitive_desc_create(
                     &result, &adesc.data, aengine.get(), nullptr),
-                              "could not create a binarization forward primitive descriptor");
+                              "could not create a quantization forward primitive descriptor");
             reset(result);
         }
 
         engine get_engine() { return engine::query(*this); }
     };
 
-    binarization_forward(const primitive_desc &aprimitive_desc,
-                      const primitive::at &src, const primitive::at &weights, const primitive::at &output_mask,
+    quantization_forward(const primitive_desc &aprimitive_desc,
+                      const primitive::at &src, const primitive::at &thresholds, const primitive::at &output_mask,
                       const memory &dst) {
         mkldnn_primitive_t result;
-        mkldnn_primitive_at_t inputs[] = { src.data, weights.data, output_mask.data};
+        mkldnn_primitive_at_t inputs[] = { src.data, thresholds.data, output_mask.data};
         const_mkldnn_primitive_t outputs[] = { dst.get() };
         error::wrap_c_api(mkldnn_primitive_create(&result, aprimitive_desc.get(), inputs, outputs),
-                          "could not create a binarization forward primitive");
+                          "could not create a quantization forward primitive");
+        reset(result);
+    }
+
+    quantization_forward(const primitive_desc &aprimitive_desc,
+                         const primitive::at &src, const primitive::at &crop_low, const primitive::at &crop_high,
+                         const primitive::at &input_scale, const primitive::at &input_shift,
+                         const primitive::at &output_scale, const primitive::at &output_shift,
+                         const memory &dst) {
+        mkldnn_primitive_t result;
+        mkldnn_primitive_at_t inputs[] = { src.data, crop_low.data, crop_high.data,
+                                           input_scale.data, input_shift.data, output_scale.data, output_shift.data};
+        const_mkldnn_primitive_t outputs[] = { dst.get() };
+        error::wrap_c_api(mkldnn_primitive_create(&result, aprimitive_desc.get(), inputs, outputs),
+                          "could not create a quantization forward primitive");
         reset(result);
     }
 };
@@ -3694,6 +3856,43 @@ struct deformable_convolution_forward: public primitive {
 
 /// @} Primitives
 
+/// @} mkldnn_api_service
+
+/// @addtogroup mkldnn_api_blas BLAS functions
+///
+/// A subset of Basic Linear ALgebra (BLAS) functions that perform
+/// matrix-matrix multiplication.
+///
+/// @{
+
+/// @copydoc mkldnn_sgemm()
+inline mkldnn_status_t sgemm(char transa, char transb, int M, int N,
+        int K, float alpha, const float *A, int lda,
+        const float *B, int ldb, float beta, float *C, int ldc) {
+    return static_cast<mkldnn_status_t>(mkldnn_sgemm(
+            transa, transb, M, N, K, alpha, A, lda, B, ldb, beta, C, ldc));
+}
+
+/// @copydoc mkldnn_gemm_u8s8s32()
+inline mkldnn_status_t gemm_u8s8s32(char transa, char transb, char offsetc, int M,
+        int N, int K, float alpha, const uint8_t *A,
+        int lda, uint8_t ao, const int8_t *B, int ldb, int8_t bo,
+        float beta, int32_t *C, int ldc, const int32_t *co) {
+    return static_cast<mkldnn_status_t>(mkldnn_gemm_u8s8s32(transa, transb, offsetc, M, N,
+            K, alpha, A, lda, ao, B, ldb, bo, beta, C, ldc, co));
+}
+
+/// @copydoc mkldnn_gemm_s8s8s32()
+inline mkldnn_status_t gemm_s8s8s32(char transa, char transb, char offsetc, int M,
+        int N, int K, float alpha, const int8_t *A,
+        int lda, int8_t ao, const int8_t *B, int ldb, int8_t bo,
+        float beta, int32_t *C, int ldc, const int32_t *co) {
+    return static_cast<mkldnn_status_t>(mkldnn_gemm_s8s8s32(transa, transb, offsetc, M, N,
+            K, alpha, A, lda, ao, B, ldb, bo, beta, C, ldc, co));
+}
+
+/// @} dnnl_api_blas
+
 /// @addtogroup cpp_api_stream Stream
 /// Execution stream operations.
 ///
@@ -3711,7 +3910,8 @@ struct stream: public handle<mkldnn_stream_t> {
 
     enum kind { any = mkldnn_stream_kind_t::mkldnn_any_stream,
         eager = mkldnn_stream_kind_t::mkldnn_eager,
-        lazy = mkldnn_stream_kind_t::mkldnn_lazy };
+        lazy = mkldnn_stream_kind_t::mkldnn_lazy,
+        eager_nostore = mkldnn_stream_kind_t::mkldnn_eager_nostore };
 
     static mkldnn_stream_kind_t convert_to_c(kind akind) {
         return static_cast<mkldnn_stream_kind_t>(akind);

@@ -1,5 +1,5 @@
 """
- Copyright (c) 2018-2019 Intel Corporation
+ Copyright (C) 2018-2020 Intel Corporation
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ import os
 import pkgutil
 import sys
 
+from extensions.load.loader import Loader
 from mo.back.replacement import BackReplacementPattern
 from mo.middle.replacement import MiddleReplacementPattern
 from mo.ops.op import Op
@@ -75,6 +76,7 @@ def load_dir(framework: str, path: str, get_front_classes: callable):
     internal_dirs = {
                          ('ops', ): [Op],
                          ('analysis',): [AnalyzeAction],
+                         ('load', framework): [Loader],
                          ('front', ): front_classes,
                          ('front', framework): front_classes,
                          ('middle', ): [MiddleReplacementPattern],

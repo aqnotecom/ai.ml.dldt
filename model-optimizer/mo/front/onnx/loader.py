@@ -1,5 +1,5 @@
 """
- Copyright (c) 2018-2019 Intel Corporation
+ Copyright (C) 2018-2020 Intel Corporation
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@ import logging as log
 import networkx as nx
 import onnx
 
-from mo.graph.graph import create_graph_with_nodes, Graph
+from mo.graph.graph import fill_graph_with_nodes, Graph
 from mo.utils.error import Error, FrameworkError
 
 
@@ -55,16 +55,15 @@ def node_id(pb):
         return 'NoNamed'
 
 
-def protobuf2nx(pb):
+def protobuf2nx(graph, pb):
     '''Convert proto message with ONNX model to equivalent NX representation.
     All nodes and edges are restored here as ONNX model has op/data representation,
     that means that nodes are connected via tensor names. Name of tensors are defined
     on demand in nodes, so we have a code similar to Caffe here. '''
-    # graph = create_graph_with_nodes(pb.graph.node, get_id=node_id, get_attrs=protobuf_attrs)
+    # graph = fill_graph_with_nodes(graph, pb.graph.node, get_id=node_id, get_attrs=protobuf_attrs)
     # convert initializers to a NX graph for easier control of model consistency and to use it as a dictionary later
-    initializers = create_graph_with_nodes(pb.graph.initializer, get_id=lambda pb: pb.name, get_attrs=protobuf_attrs)
-
-    graph = Graph()
+    initializers = Graph()
+    fill_graph_with_nodes(initializers, pb.graph.initializer, get_id=lambda pb: pb.name, get_attrs=protobuf_attrs)
 
     # maps a tensor name to a node produced it and the node port: str -> (node_id, node_port)
     data_nodes_map = {}
@@ -86,10 +85,11 @@ def protobuf2nx(pb):
 
     # go over all initializer and make sure that all of them are added to the graph
     for initializer in initializers.nodes():
-        if not graph.has_node(initializer):
-            graph.add_node(initializer, kind='op', op='Const', pb=initializers.node[initializer]['pb'],
+        initializer_id = 'onnx_initializer_node_' + initializer
+        if not graph.has_node(initializer_id):
+            graph.add_node(initializer_id, kind='op', op='Const', pb=initializers.node[initializer]['pb'],
                            pb_init=initializers.node[initializer]['pb'])
-            data_nodes_map[initializer] = (initializer, 0)
+            data_nodes_map[initializer] = (initializer_id, 0)
 
     # Go through all nodes in the original model order (because data nodes are defined on-the-fly and order is
     # important)
@@ -128,5 +128,3 @@ def protobuf2nx(pb):
             if out in data_nodes_map:
                 log.debug("Detected reuse of blob {}.".format(out))
             data_nodes_map[out] = (id, src_port)
-
-    return graph

@@ -1,4 +1,4 @@
-﻿// Copyright (c) 2019 Intel Corporation
+﻿// Copyright (c) 2019-2020 Intel Corporation
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@
 #include <iostream>
 #include "binary_convolution_kernel_1x1_b_fs_yx_fsv16.h"
 #include <string>
+#include <core/actual_kernels/activation/activation_kernel_base.h>
 
 namespace kernel_selector {
 
@@ -33,7 +34,7 @@ ParamsKey BinaryConvolutionKernel1x1_b_fs_yx_fsv16::GetSupportedKey() const {
     k.EnableOutputDataType(Datatype::INT8);
     k.EnableOutputDataType(Datatype::INT32);
     k.EnableInputLayout(DataLayout::b_fs_yx_32fp);
-    k.EnableOutputLayout(DataLayout::bfyx_f16);
+    k.EnableOutputLayout(DataLayout::b_fs_yx_fsv16);
     k.EnableTensorOffset();
     k.EnableTensorPitches();
     k.EnableNonBiasTerm();
@@ -62,7 +63,7 @@ BinaryConvolutionKernelBase::DispatchData BinaryConvolutionKernel1x1_b_fs_yx_fsv
     kd.lws1 = 1;
     kd.lws2 = 1;
 
-    kd.effiency = FORCE_PRIORITY_1;
+    kd.efficiency = FORCE_PRIORITY_1;
 
     return kd;
 }
@@ -118,7 +119,8 @@ JitConstants BinaryConvolutionKernel1x1_b_fs_yx_fsv16::GetFusedPrimitivesJitCons
                                                                                       const DispatchData& /*kd*/) const {
     JitConstants jit = {};
 
-    FusedOpsConfiguration conf = {"", {"b", "(f_block*16 + oc)", "y", "x"}, "res", 1, false, false, true, false };
+    auto input_dt = GetUnitType(params);
+    FusedOpsConfiguration conf = {"", {"b", "(f_block*16 + oc)", "y", "x"}, "res", input_dt, 1 };
     jit.Merge(MakeFusedOpsDeclsJitConstants(params, {conf}));
 
     size_t op_id = 0;
@@ -126,6 +128,8 @@ JitConstants BinaryConvolutionKernel1x1_b_fs_yx_fsv16::GetFusedPrimitivesJitCons
     std::string eltwise_fused_ops = "";
     std::string prepare_data = "";
     for (auto& fused_dep : params.fused_ops) {
+        auto fused_dep_codegen = FusedOpsCodeGenerator(fused_dep);
+
         auto get_aligned_load = [&](std::string ptr, std::string byte_offset) -> std::string {
             if (fused_dep.tensors[0].GetDType() == Datatype::F32)
                 return "(intel_sub_group_block_read((const __global uint*)(" + ptr + ") + (" + byte_offset + ")))";
@@ -138,43 +142,45 @@ JitConstants BinaryConvolutionKernel1x1_b_fs_yx_fsv16::GetFusedPrimitivesJitCons
             return "(intel_sub_group_shuffle(" + var + ", " + lid + "))";
         };
 
-        std::string data_type = fused_dep.GetInputTypeName(0, 1);
-        std::string vec_data_type = fused_dep.GetInputTypeName(0, 1);
+        std::string data_type = fused_dep_codegen.GetInputTypeName(0, 1);
+        std::string vec_data_type = fused_dep_codegen.GetInputTypeName(0, 1);
         std::string sc = "sc" + std::to_string(op_id);
-        switch (fused_dep.type) {
-            case binary_convolution_params::fused_operation_desc::Type::SCALE: {
+        switch (fused_dep.GetType()) {
+            case KernelType::SCALE: {
                 std::string cast_type = (fused_dep.tensors[0].GetDType() == Datatype::F32) ? "as_float" : "as_half";
                 if (fused_dep.tensors.size() == 1) {
-                    std::string var_name = fused_dep.GetInputVarName(0);
+                    std::string var_name = fused_dep_codegen.GetInputVarName(0);
                     prepare_data += "\\\n\t" + vec_data_type + " " + var_name + " = " + cast_type +
-                                    get_aligned_load(fused_dep.GetInputPtrName(0), "f_block*OC_BLOCK_SIZE") + ";";
+                                    get_aligned_load(fused_dep_codegen.GetInputPtrName(0), "f_block*OC_BLOCK_SIZE") + ";";
                     eltwise_fused_ops += "\\\n\t" + data_type + " " + sc + " = " + get_shuffle(var_name, "oc") + ";";
                     eltwise_fused_ops += "\\\n\tres = res*" + var_name + ";";
                 } else {
-                    std::string var0_name = fused_dep.GetInputVarName(0);
-                    std::string var1_name = fused_dep.GetInputVarName(1);
+                    std::string var0_name = fused_dep_codegen.GetInputVarName(0);
+                    std::string var1_name = fused_dep_codegen.GetInputVarName(1);
                     prepare_data += "\\\n\t" + vec_data_type + " " + var0_name + " = " + cast_type +
-                                    get_aligned_load(fused_dep.GetInputPtrName(0), "f_block*OC_BLOCK_SIZE") + ";";
+                                    get_aligned_load(fused_dep_codegen.GetInputPtrName(0), "f_block*OC_BLOCK_SIZE") + ";";
                     prepare_data += "\\\n\t" + vec_data_type + " " + var1_name + " = " + cast_type +
-                                    get_aligned_load(fused_dep.GetInputPtrName(1), "f_block*OC_BLOCK_SIZE") + ";";
+                                    get_aligned_load(fused_dep_codegen.GetInputPtrName(1), "f_block*OC_BLOCK_SIZE") + ";";
                     eltwise_fused_ops += "\\\n\tres = res*" + var0_name + " + " + var1_name + ";";
                 }
 
                 break;
             }
-            case binary_convolution_params::fused_operation_desc::Type::ACTIVATION: {
+            case KernelType::ACTIVATION: {
+                auto p = fused_dep.GetOpParams<activation_fuse_params>();
+                base_activation_params activation = p->param;
+                if (activation.function != ActivationFunction::NONE) {
+                    auto suffix = "_FUSED_OP" + std::to_string(op_id);
+
+                    jit.Merge(MakeActivationJitConstants(activation, fused_dep.output_tensor.GetDType(), suffix));
+                    eltwise_fused_ops += "\\\n\tres = ACTIVATION" + suffix + "((OUTPUT_TYPE)res, ACTIVATION_PARAMS" + suffix + ");";
+                }
                 break;
             }
             default:
                 throw std::invalid_argument("Invalid fused op in binary_convolution kernel: " + params.layerID);
         }
 
-        if (fused_dep.activation.function != ActivationFunction::NONE) {
-            auto suffix = "_FUSED_OP" + std::to_string(op_id);
-
-            jit.Merge(MakeActivationJitConstants(fused_dep.activation, suffix));
-            eltwise_fused_ops += "\\\n\tres = ACTIVATION" + suffix + "((OUTPUT_TYPE)res, ACTIVATION_PARAMS" + suffix + ");";
-        }
         op_id++;
     }
     jit.AddConstant(MakeJitConstant("DO_ELTWISE_FUSED_OPS", eltwise_fused_ops));

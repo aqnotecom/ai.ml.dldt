@@ -36,10 +36,11 @@ struct generic_layer_gpu : typed_primitive_impl<generic_layer> {
         : outer(arg),
           _cl_kernel_data(*outer.get_primitive()->generic_params.clKernel.get()),
           _kernel(arg.get_program().get_engine().get_context(),
-                  outer.get_primitive()->generic_params.clKernel->kernelString) {}
+                  outer.get_primitive()->generic_params.clKernel->kernelString,
+                  arg.get_program().get_id()) {}
 
     event_impl::ptr execute_impl(const std::vector<event_impl::ptr>& events, generic_layer_inst& instance) override {
-        uint16_t stream_id = instance.get_network().get_stream_id();
+        uint32_t net_id = instance.get_network().get_id();
         gpu::kernel::kernel_arguments_data args;
         args.scalars = &_cl_kernel_data.scalars;
 
@@ -47,8 +48,8 @@ struct generic_layer_gpu : typed_primitive_impl<generic_layer> {
             args.inputs.push_back((memory_impl::cptr) &instance.input_memory(i));
         }
         args.output = (memory_impl::cptr) &instance.output_memory();
-        _kernel.set_output_event(stream_id, instance.node.is_output());
-        return _kernel.run(stream_id, _cl_kernel_data, events, args);
+        _kernel.set_output_event(net_id, instance.node.is_output());
+        return _kernel.run(net_id, _cl_kernel_data, events, args);
     }
 };
 
@@ -59,7 +60,7 @@ struct generic_layer_cpu : typed_primitive_impl<generic_layer> {
     explicit generic_layer_cpu(const generic_layer_node& arg) : outer(arg) {}
 
     event_impl::ptr execute_impl(const std::vector<event_impl::ptr>& events, generic_layer_inst& instance) override {
-        uint16_t stream_id = instance.get_network().get_stream_id();
+        uint32_t net_id = instance.get_network().get_id();
         auto& input_mem = instance.input_memory();
         auto& output_mem = instance.output_memory();
 
@@ -76,7 +77,7 @@ struct generic_layer_cpu : typed_primitive_impl<generic_layer> {
 
         cpu_kernel.Execute(old_pointer.data(), old_pointer.size(), new_pointer.data(), new_pointer.size());
 
-        return instance.get_network().get_engine().create_user_event(stream_id, true);
+        return instance.get_network().get_engine().create_user_event(net_id, true);
     }
 };
 

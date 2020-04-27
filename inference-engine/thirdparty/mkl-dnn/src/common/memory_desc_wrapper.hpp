@@ -93,11 +93,12 @@ struct memory_desc_wrapper: public c_compatible {
     size_t additional_buffer_data_size() const {
         using namespace mkldnn::impl::memory_format;
         return (utils::one_of(format(),
-                hwio_s8s8, hwigo_s8s8, gOIhw4o4i_s8s8,
+                hwio_s8s8, hwigo_s8s8, dhwio_s8s8, dhwigo_s8s8, gOIhw4o4i_s8s8,
                 gOIw4i16o4i_s8s8, OIw4i16o4i_s8s8, gOIhw4i16o4i_s8s8,
                 OIhw4i16o4i_s8s8, gOIhw2i8o4i_s8s8, Goiw16g_s8s8,
-                gOhIw8o4i_s8s8, OhIw8o4i_s8s8,
-                Goihw16g_s8s8))
+                gOhIw8o4i_s8s8, OhIw8o4i_s8s8, Goihw8g_s8s8, Goihw16g_s8s8,
+                OdhIw8o4i_s8s8, gOdhIw8o4i_s8s8, Goidhw8g_s8s8, Goidhw16g_s8s8,
+                gOIdhw4i16o4i_s8s8, OIdhw4i16o4i_s8s8))
             ? sizeof(int32_t) : 0;
     }
 
@@ -105,10 +106,12 @@ struct memory_desc_wrapper: public c_compatible {
     bool is_additional_buffer() const {
         using namespace mkldnn::impl::memory_format;
         return (utils::one_of(format(),
-                hwio_s8s8, hwigo_s8s8, gOIhw4o4i_s8s8, gOIw4i16o4i_s8s8,
-                OIw4i16o4i_s8s8, gOIhw4i16o4i_s8s8, OIhw4i16o4i_s8s8,
-                gOIhw2i8o4i_s8s8, gOhIw8o4i_s8s8, OhIw8o4i_s8s8,
-                Goiw16g_s8s8, Goihw16g_s8s8))
+                hwio_s8s8, hwigo_s8s8, dhwio_s8s8, dhwigo_s8s8, gOIhw4o4i_s8s8,
+                gOIw4i16o4i_s8s8, OIw4i16o4i_s8s8, gOIhw4i16o4i_s8s8,
+                OIhw4i16o4i_s8s8, gOIhw2i8o4i_s8s8, Goiw16g_s8s8,
+                gOhIw8o4i_s8s8, OhIw8o4i_s8s8, Goihw8g_s8s8, Goihw16g_s8s8,
+                OdhIw8o4i_s8s8, gOdhIw8o4i_s8s8, Goidhw8g_s8s8, Goidhw16g_s8s8,
+                gOIdhw4i16o4i_s8s8, OIdhw4i16o4i_s8s8))
             ? true : false;
     }
 
@@ -118,19 +121,28 @@ struct memory_desc_wrapper: public c_compatible {
         const auto &padding_dims = blocking_desc().padding_dims;
         switch(format()) {
             case hwigo_s8s8:
+            case dhwigo_s8s8:
             case Goiw16g_s8s8:
+            case Goihw8g_s8s8:
             case Goihw16g_s8s8:
+            case Goidhw8g_s8s8:
+            case Goidhw16g_s8s8:
             case gOIhw4o4i_s8s8:
             case gOIhw2i8o4i_s8s8:
             case gOIw4i16o4i_s8s8:
             case gOIhw4i16o4i_s8s8:
+            case gOIdhw4i16o4i_s8s8:
             case gOhIw8o4i_s8s8:
+            case gOdhIw8o4i_s8s8:
                 return size_t(padding_dims[0]) * size_t(padding_dims[1])
                     * additional_buffer_data_size();
             case hwio_s8s8:
+            case dhwio_s8s8:
             case OIw4i16o4i_s8s8:
             case OIhw4i16o4i_s8s8:
+            case OIdhw4i16o4i_s8s8:
             case OhIw8o4i_s8s8:
+            case OdhIw8o4i_s8s8:
                 return size_t(padding_dims[0]) * additional_buffer_data_size();
             default:
                 return 0;
@@ -249,10 +261,13 @@ struct memory_desc_wrapper: public c_compatible {
         }
         if (utils::one_of(format(), gOIw4i16o4i, OIw4i16o4i, gOIw4i16o4i_s8s8,
                     OIw4i16o4i_s8s8, gOIhw4i16o4i, OIhw4i16o4i,
-                    gOIhw4i16o4i_s8s8, OIhw4i16o4i_s8s8)) {
+                    gOIhw4i16o4i_s8s8, OIhw4i16o4i_s8s8,
+                    gOIdhw4i16o4i, gOIdhw4i16o4i_s8s8,
+                    OIdhw4i16o4i, OIdhw4i16o4i_s8s8)) {
             // TODO: Fix temporary workaround for formats with double blocking
             const bool with_groups = utils::one_of(format(), gOIw4i16o4i,
-                    gOIw4i16o4i_s8s8, gOIhw4i16o4i, gOIhw4i16o4i_s8s8);
+                    gOIw4i16o4i_s8s8, gOIhw4i16o4i, gOIhw4i16o4i_s8s8,
+                    gOIdhw4i16o4i, gOIdhw4i16o4i_s8s8);
             const int oc_16 = pos[with_groups + 0] % 16;
             const int ic_4 = pos[with_groups + 1] % 4;
             phys_offset += 4 * oc_16 + ic_4 - (oc_16 + 16 * ic_4);
@@ -385,18 +400,22 @@ inline bool memory_desc_wrapper::operator==(const memory_desc_wrapper &rhs)
             && utils::array_cmp(dims(), rhs.dims(), ndims())
             && data_type() == rhs.data_type()
             && ((is_blocking_desc() && rhs.is_blocking_desc())
-                       || (is_wino_desc() && rhs.is_wino_desc())
-                       || (is_rnn_packed_desc() && rhs.is_rnn_packed_desc()))
-            && (is_blocking_desc() ? blocking_desc_is_equal(blocking_desc(),
-                                             rhs.blocking_desc(), ndims()) :
-                                     true)
-            && (is_wino_desc() ? wino_desc_is_equal(
-                                         wino_desc(), rhs.wino_desc()) :
-                                 true)
-            && (is_rnn_packed_desc() ?
-                               rnn_packed_desc_is_equal(rnn_packed_desc(),
-                                       rhs.rnn_packed_desc()) :
-                               true);
+                    || (is_wino_desc() && rhs.is_wino_desc())
+                    || (is_rnn_packed_desc() && rhs.is_rnn_packed_desc()))
+            && (is_blocking_desc() ? blocking_desc_is_equal(
+                        blocking_desc(), rhs.blocking_desc(), ndims())
+                                   : true)
+            && IMPLICATION(
+                    utils::one_of(true,
+                            types::is_format_double_blocked(format()),
+                            types::is_format_double_blocked(rhs.format())),
+                    format() == rhs.format())
+            && (is_wino_desc()
+                            ? wino_desc_is_equal(wino_desc(), rhs.wino_desc())
+                            : true)
+            && (is_rnn_packed_desc() ? rnn_packed_desc_is_equal(
+                        rnn_packed_desc(), rhs.rnn_packed_desc())
+                                     : true);
 }
 
 inline bool memory_desc_wrapper::similar_to(const memory_desc_wrapper &rhs,

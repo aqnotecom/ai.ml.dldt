@@ -72,12 +72,15 @@ const char *mkldnn_fmt2str(mkldnn_memory_format_t v) {
     if (v == mkldnn_io) return "io";
     if (v == mkldnn_oiw) return "oiw";
     if (v == mkldnn_wio) return "wio";
+    if (v == mkldnn_owi) return "owi";
     if (v == mkldnn_oihw) return "oihw";
     if (v == mkldnn_hwio) return "hwio";
+    if (v == mkldnn_ohwi) return "ohwi";
     if (v == mkldnn_ihwo) return "ihwo";
     if (v == mkldnn_iohw) return "iohw";
     if (v == mkldnn_oidhw) return "oidhw";
     if (v == mkldnn_dhwio) return "dhwio";
+    if (v == mkldnn_odhwi) return "odhwi";
     if (v == mkldnn_goiw) return "goiw";
     if (v == mkldnn_goihw) return "goihw";
     if (v == mkldnn_hwigo) return "hwigo";
@@ -122,6 +125,8 @@ const char *mkldnn_fmt2str(mkldnn_memory_format_t v) {
     if (v == mkldnn_OIw4i16o4i_s8s8) return "OIw4i16o4i_s8s8";
     if (v == mkldnn_OIhw4i16o4i) return "OIhw4i16o4i";
     if (v == mkldnn_OIhw4i16o4i_s8s8) return "OIhw4i16o4i_s8s8";
+    if (v == mkldnn_OIdhw4i16o4i) return "OIdhw4i16o4i";
+    if (v == mkldnn_OIdhw4i16o4i_s8s8) return "OIdhw4i16o4i_s8s8";
     if (v == mkldnn_OIhw8i16o2i) return "OIhw8i16o2i";
     if (v == mkldnn_IOhw8i16o2i) return "IOhw8i16o2i";
     if (v == mkldnn_OIhw8o16i2o) return "OIhw8o16i2o";
@@ -170,6 +175,9 @@ const char *mkldnn_fmt2str(mkldnn_memory_format_t v) {
     if (v == mkldnn_gIOw8o16i2o) return "gIOw8o16i2o";
     if (v == mkldnn_gIOw16o16i) return "gIOw16o16i";
     if (v == mkldnn_hwigo_s8s8) return "hwigo_s8s8";
+    if (v == mkldnn_dhwigo_s8s8) return "dhwigo_s8s8";
+    if (v == mkldnn_dhwio_s8s8) return "dhwio_s8s8";
+    if (v == mkldnn_dhwigo) return "dhwigo";
     if (v == mkldnn_gOIhw4i4o) return "gOIhw4i4o";
     if (v == mkldnn_gOIhw8i8o) return "gOIhw8i8o";
     if (v == mkldnn_gOIhw16i16o) return "gOIhw16i16o";
@@ -177,6 +185,8 @@ const char *mkldnn_fmt2str(mkldnn_memory_format_t v) {
     if (v == mkldnn_gOIw4i16o4i_s8s8) return "gOIw4i16o4i_s8s8";
     if (v == mkldnn_gOIhw4i16o4i) return "gOIhw4i16o4i";
     if (v == mkldnn_gOIhw4i16o4i_s8s8) return "gOIhw4i16o4i_s8s8";
+    if (v == mkldnn_gOIdhw4i16o4i) return "gOIdhw4i16o4i";
+    if (v == mkldnn_gOIdhw4i16o4i_s8s8) return "gOIdhw4i16o4i_s8s8";
     if (v == mkldnn_gOIhw2i8o4i) return "gOIhw2i8o4i";
     if (v == mkldnn_gOIhw2i8o4i_s8s8) return "gOIhw2i8o4i_s8s8";
     if (v == mkldnn_gOIhw8i16o2i) return "gOIhw8i16o2i";
@@ -195,6 +205,7 @@ const char *mkldnn_fmt2str(mkldnn_memory_format_t v) {
     if (v == mkldnn_gOhwi4o) return "gOhwi4o";
     if (v == mkldnn_gOhwi16o) return "gOhwi16o";
     if (v == mkldnn_Goihw8g) return "Goihw8g";
+    if (v == mkldnn_Goihw8g_s8s8) return "Goihw8g_s8s8";
     if (v == mkldnn_Goiw16g) return "Goiw16g";
     if (v == mkldnn_Goiw16g_s8s8) return "Goiw16g_s8s8";
     if (v == mkldnn_Goihw16g) return "Goihw16g";
@@ -215,6 +226,14 @@ const char *mkldnn_fmt2str(mkldnn_memory_format_t v) {
     if (v == mkldnn_gOidhw4o) return "gOidhw4o";
     if (v == mkldnn_gOidhw16o) return "gOidhw16o";
     if (v == mkldnn_gOdhwi16o) return "gOdhwi16o";
+    if (v == mkldnn_OdhIw8o4i) return "OdhIw8o4i";
+    if (v == mkldnn_OdhIw8o4i_s8s8) return "OdhIw8o4i_s8s8";
+    if (v == mkldnn_gOdhIw8o4i) return "gOdhIw8o4i";
+    if (v == mkldnn_gOdhIw8o4i_s8s8) return "gOdhIw8o4i_s8s8";
+    if (v == mkldnn_Goidhw8g) return "Goidhw8g";
+    if (v == mkldnn_Goidhw8g_s8s8) return "Goidhw8g_s8s8";
+    if (v == mkldnn_Goidhw16g) return "Goidhw16g";
+    if (v == mkldnn_Goidhw16g_s8s8) return "Goidhw16g_s8s8";
     if (v == mkldnn_wino_fmt) return "wino_fmt";
     if (v == mkldnn_rnn_packed) return "rnn_packed";
     if (v == mkldnn_format_last) return "format_last";
@@ -258,6 +277,7 @@ const char *mkldnn_prim_kind2str(mkldnn_primitive_kind_t v) {
     if (v == mkldnn_roi_pooling) return "roi_pooling";
     if (v == mkldnn_binary_convolution) return "binary_convolution";
     if (v == mkldnn_binarization) return "binarization";
+    if (v == mkldnn_quantization) return "quantization";
     if (v == mkldnn_deformable_convolution) return "deformable_convolution";
     assert(!"unknown prim_kind");
     return "unknown prim_kind";
@@ -278,9 +298,11 @@ const char *mkldnn_alg_kind2str(mkldnn_alg_kind_t v) {
     if (v == mkldnn_eltwise_bounded_relu) return "eltwise_bounded_relu";
     if (v == mkldnn_eltwise_soft_relu) return "eltwise_soft_relu";
     if (v == mkldnn_eltwise_logistic) return "eltwise_logistic";
-    if (v == mkldnn_eltwise_clamp) return "eltwise_clamp";
+    if (v == mkldnn_eltwise_gelu) return "eltwise_gelu";
     if (v == mkldnn_eltwise_exp) return "eltwise_exp";
+    if (v == mkldnn_eltwise_clamp) return "eltwise_clamp";
     if (v == mkldnn_eltwise_not) return "eltwise_not";
+    if (v == mkldnn_eltwise_swish) return "eltwise_swish";
     if (v == mkldnn_pooling_max) return "pooling_max";
     if (v == mkldnn_pooling_avg_include_padding) return "pooling_avg_include_padding";
     if (v == mkldnn_pooling_avg_exclude_padding) return "pooling_avg_exclude_padding";
@@ -299,6 +321,8 @@ const char *mkldnn_alg_kind2str(mkldnn_alg_kind_t v) {
     if (v == mkldnn_roi_pooling_bilinear) return "roi_pooling_bilinear";
     if (v == mkldnn_binary_convolution_direct) return "binary_convolution_direct";
     if (v == mkldnn_binarization_depthwise) return "binarization_depthwise";
+    if (v == mkldnn_quantization_quantize_dequantize) return "quantization_quantize_dequantize";
+    if (v == mkldnn_quantization_quantize) return "quantization_quantize";
     if (v == mkldnn_deformable_convolution_direct) return "deformable_convolution_direct";
     assert(!"unknown alg_kind");
     return "unknown alg_kind";

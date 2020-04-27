@@ -1,5 +1,5 @@
 /*
-// Copyright (c) 2016 Intel Corporation
+// Copyright (c) 2016-2020 Intel Corporation
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -37,6 +37,19 @@ std::string fused_conv_eltwise_params::to_string() const {
     s << conv.stride.x << "_" << conv.stride.y << "_" << conv.stride.z << "_";
     s << conv.dilation.x << "_" << conv.dilation.y << "_" << conv.dilation.z << "_";
     s << conv.padding.x << "_" << conv.padding.y << "_" << conv.padding.z << "_";
+    s << conv.split;
+
+    return s.str();
+}
+
+std::string fused_conv_eltwise_params::to_cache_string_v2() const {
+    std::stringstream s;
+
+    s << weight_bias_params::to_cache_string_v2() << ";";
+    s << conv.filterSize.x << "_" << conv.filterSize.y << "_" << conv.filterSize.z << ";";
+    s << conv.stride.x << "_" << conv.stride.y << "_" << conv.stride.z << ";";
+    s << conv.dilation.x << "_" << conv.dilation.y << "_" << conv.dilation.z << ";";
+    s << conv.padding.x << "_" << conv.padding.y << "_" << conv.padding.z << ";";
     s << conv.split;
 
     return s.str();
@@ -88,11 +101,7 @@ bool fused_conv_eltwise_kernel_base::Validate(const Params& p, const optional_pa
     const fused_conv_eltwise_params& params = static_cast<const fused_conv_eltwise_params&>(p);
     const fused_conv_eltwise_optional_params& optParams = static_cast<const fused_conv_eltwise_optional_params&>(o);
 
-    bool bSupportedWeightsLayout = false;
-
-    for (WeightsLayout l : GetSupportedWeightLayouts(params)) {
-        bSupportedWeightsLayout |= params.weights.GetLayout() == l;
-    }
+    bool bSupportedWeightsLayout = params.weights.GetLayout() == GetPreferreddWeightsLayout(params);
 
     const bool bWeightsOK = bSupportedWeightsLayout || optParams.allowStaticInputReordering;
 
@@ -140,9 +149,9 @@ JitConstants fused_conv_eltwise_kernel_base::GetJitConstants(const fused_conv_el
         mem_consts.AddConstants({MakeJitConstant("LOCAL_CONVOLUTION", params.conv.local_convolution)});
     }
 
-    JitConstants eltw_activations = MakeActivationJitConstants(params.activations, "_ELTW");
+    JitConstants eltw_activations = MakeActivationJitConstants(params.activations, GetUnitType(params), "_ELTW");
     mem_consts.Merge(eltw_activations);
-    JitConstants conv_activations = MakeActivationJitConstants(params.conv.activations, "_CONV");
+    JitConstants conv_activations = MakeActivationJitConstants(params.conv.activations, GetUnitType(params), "_CONV");
     mem_consts.Merge(conv_activations);
     mem_consts.AddConstant(MakeJitConstant("ELTW_CALIBRATION_TERM", params.eltw.output_calibration));
 
@@ -232,13 +241,14 @@ fused_conv_eltwise_kernel_base::DispatchData fused_conv_eltwise_kernel_base::Set
     kd.fp16UnitUsed = out.GetDType() == Datatype::F16;
     std::vector<size_t> global;
     if (params.output.GetLayout() == DataLayout::bfyx || params.output.GetLayout() == DataLayout::byxf ||
-        params.output.GetLayout() == DataLayout::bfzyx || params.output.GetLayout() == DataLayout::bfzyx_f16) {
+        params.output.GetLayout() == DataLayout::bfzyx || params.output.GetLayout() == DataLayout::b_fs_zyx_fsv16 ||
+        params.output.GetLayout() == DataLayout::bs_fs_zyx_bsv16_fsv16) {
         global = {out.X().v, out.Y().v * out.Z().v, out.Feature().v * out.Batch().v};
     } else {
         global = {out.Feature().v * out.Batch().v, out.X().v, out.Y().v * out.Z().v };
     }
 
-    auto local = GetOptimalLocalWorkGroupSizes(global);
+    auto local = GetOptimalLocalWorkGroupSizes(global, params.engineInfo);
 
     kd.gws0 = global[0];
     kd.gws1 = global[1];
@@ -260,7 +270,7 @@ fused_conv_eltwise_kernel_base::DispatchData fused_conv_eltwise_kernel_base::Set
     kd.gemmStyle.subBlockDimK = 1;
     kd.gemmStyle.subBlockDimM = 0;
     kd.gemmStyle.subBlockDimN = 0;
-    kd.effiency = DONT_USE_IF_HAVE_SOMETHING_ELSE;
+    kd.efficiency = DONT_USE_IF_HAVE_SOMETHING_ELSE;
     return kd;
 }
 
@@ -287,7 +297,7 @@ KernelsData fused_conv_eltwise_kernel_base::GetCommonKernelsData(const Params& p
 
     bool succeed = UpdateWeightsParams(newParams,
                                        options,
-                                       GetSupportedWeightLayouts(newParams),
+                                       GetPreferreddWeightsLayout(newParams),
                                        kd.weightsReorderParams,
                                        GetSupportedKey());
 
@@ -310,9 +320,7 @@ KernelsData fused_conv_eltwise_kernel_base::GetCommonKernelsData(const Params& p
                      exeMode,
                      true,
                      !newParams.bias.empty(),
-                     1,
-                     newParams.conv.int8_quantization,
-                     newParams.conv.output_calibration);
+                     1);
     kernel.arguments.push_back({ArgumentDescriptor::Types::SPLIT, 0});
     // eltwise's second input
     if (newParams.second_input_in_output) {
@@ -323,7 +331,7 @@ KernelsData fused_conv_eltwise_kernel_base::GetCommonKernelsData(const Params& p
     if (!newParams.eltw.output_calibration_factors.empty())
         kernel.arguments.push_back({ArgumentDescriptor::Types::OUTPUT_CALIBRATION_FACTORS, 1});
 
-    kd.estimatedTime = runInfo.effiency;
+    kd.estimatedTime = runInfo.efficiency;
     kd.autoTuneIndex = autoTuneIndex;
 
     return {kd};

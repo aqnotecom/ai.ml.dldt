@@ -261,6 +261,7 @@ void jit_avx512_common_1x1_conv_kernel::reduce_loop(int load_loop_blk,
 
         int eltwise_inj_idx = 0;
         int depthwise_inj_idx = 0;
+        int quantization_inj_idx = 0;
         const auto &p = attr_.post_ops_;
 
         for (int i = 0; i < p.len_; i++) {
@@ -300,6 +301,26 @@ void jit_avx512_common_1x1_conv_kernel::reduce_loop(int load_loop_blk,
                 }
 
                 depthwise_inj_idx++;
+            } else if (post_op.is_quantization()) {
+                quantization_injectors[quantization_inj_idx]->init_crop_ptrs(reg_oc_off);
+                for (int j = 0; j < load_loop_blk; ++j) {
+                    int s_idx = vreg_accum(j, 0).getIdx();
+                    quantization_injectors[quantization_inj_idx]->compute_crop(s_idx, s_idx + ur, j * jcp.oc_block * sizeof(float));
+                }
+
+                quantization_injectors[quantization_inj_idx]->init_input_scale_shift_ptrs(reg_oc_off);
+                for (int j = 0; j < load_loop_blk; ++j) {
+                    int s_idx = vreg_accum(j, 0).getIdx();
+                    quantization_injectors[quantization_inj_idx]->compute_input_scale_shift(s_idx, s_idx + ur, j * jcp.oc_block * sizeof(float), true);
+                }
+
+                quantization_injectors[quantization_inj_idx]->init_output_scale_shift_ptrs(reg_oc_off);
+                for (int j = 0; j < load_loop_blk; ++j) {
+                    int s_idx = vreg_accum(j, 0).getIdx();
+                    quantization_injectors[quantization_inj_idx]->compute_output_scale_shift(s_idx, s_idx + ur, j * jcp.oc_block * sizeof(float));
+                }
+
+                quantization_inj_idx++;
             }
         }
 
@@ -532,6 +553,12 @@ void jit_avx512_common_1x1_conv_kernel::generate()
                     this,
                     post_op.depthwise.alg
             ));
+        } else if (post_op.is_quantization()) {
+            quantization_injectors.push_back(new jit_uni_quantization_injector_f32<avx512_common>(
+                    this,
+                    post_op,
+                    zmm_d_weights, zmm_d_bias, reg_d_weights, reg_d_bias
+            ));
         }
     }
 
@@ -662,7 +689,8 @@ bool jit_avx512_common_1x1_conv_kernel::post_ops_ok(
         bool ok = true;
 
         for (int i = 0; i < p.len_; i++) {
-            ok = ok && utils::one_of(p.entry_[i].kind, primitive_kind::sum, primitive_kind::eltwise, primitive_kind::depthwise);
+            ok = ok && utils::one_of(p.entry_[i].kind, primitive_kind::sum, primitive_kind::eltwise, primitive_kind::depthwise,
+                                                       primitive_kind::quantization);
         }
         return ok;
     };
@@ -744,12 +772,13 @@ status_t jit_avx512_common_1x1_conv_kernel::init_conf(jit_1x1_conv_conf_t &jcp,
         && one_of(cd.bias_desc.format, memory_format::undef, any, x);
     if (!args_ok) return status::unimplemented;
 
-    args_ok = true
-        && jcp.oc % simd_w == 0 && jcp.ic % simd_w == 0
-        && jcp.t_pad == 0 && jcp.l_pad == 0
-        && jcp.stride_w == 1 && jcp.stride_h == 1 // TODO: support some strides
-        && jcp.kh == 1 && jcp.kw == 1;
-    if (!args_ok) return status::unimplemented;
+    args_ok = true && jcp.oc % simd_w == 0 && jcp.ic % simd_w == 0
+            && jcp.t_pad == 0 && jcp.l_pad == 0 && jcp.stride_w == 1
+            && jcp.stride_h == 1 // TODO: support some strides
+            && jcp.ow == jcp.iw && jcp.oh == jcp.ih // enforce rpad=0
+            && jcp.kh == 1 && jcp.kw == 1;
+    if (!args_ok)
+        return status::unimplemented;
 
     jcp.ic_block = jcp.oc_block = simd_w;
     jcp.transpose_src = false;

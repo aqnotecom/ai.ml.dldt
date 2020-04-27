@@ -1,29 +1,36 @@
-// Copyright (C) 2018-2019 Intel Corporation
+// Copyright (C) 2018-2020 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
+/**
+ * @file
+ */
+
 #pragma once
 
-#include <builders/ie_layer_builder.hpp>
-#include <ie_icnn_network.hpp>
 #include <cpp/ie_cnn_network.h>
-#include <ie_network.hpp>
-#include <ie_context.hpp>
-#include <ie_common.h>
 #include <ie_blob.h>
-#include <utility>
+#include <ie_common.h>
+
+#include <builders/ie_layer_builder.hpp>
+#include <ie_context.hpp>
+#include <ie_icnn_network.hpp>
+#include <ie_network.hpp>
+#include <map>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
-#include <map>
 
 namespace InferenceEngine {
 namespace Builder {
 
 /**
+ * @deprecated Use ngraph API instead.
  * @brief This class implements a builder for IE Network
  */
-class INFERENCE_ENGINE_API_CLASS(Network): public INetwork {
+IE_SUPPRESS_DEPRECATED_START
+class INFERENCE_ENGINE_NN_BUILDER_API_CLASS(Network): public INetwork {
 public:
     /**
      * @brief A shared pointer to the Network builder
@@ -33,6 +40,7 @@ public:
      * @brief An iterator for Network builder definition
      */
     using iterator = details::INetworkIterator<Network, Layer>;
+
     /**
      * @brief Begin network iterator
      * @return Network iterator
@@ -83,18 +91,21 @@ public:
     /**
      * @brief The constructor creates a builder based on ICNNNetwork with custom Context
      *
+     * @param ieContext constant reference to Context object
      * @param network constant reference to ICNNNetwork object
      */
     Network(const Context& ieContext, const ICNNNetwork& network);
     /**
      * @brief The constructor creates a empty builder with network name and custom Context
      *
+     * @param ieContext constant reference to Context object
      * @param name Network name
      */
     Network(const Context& ieContext, const std::string& name);
     /**
      * @brief The constructor creates a builder based on INetwork with custom Context
      *
+     * @param ieContext constant reference to Context object
      * @param network constant reference to INetwork object
      */
     Network(const Context& ieContext, const INetwork& network);
@@ -222,7 +233,7 @@ public:
     /**
      * @brief Validates network
      *
-    */
+     */
     void validate();
 
     /**
@@ -237,12 +248,16 @@ private:
 };
 
 /**
+ * @deprecated Use ngraph API instead.
  * @brief This function converts INetwork to ICNNNetwork
  *
  * @param network constant shared pointer to INetwork object
  * @return constant shared pointer to ICNNNetwork
  */
+INFERENCE_ENGINE_NN_BUILDER_DEPRECATED
 INFERENCE_ENGINE_API_CPP(const std::shared_ptr<ICNNNetwork>) convertToICNNNetwork(const INetwork::CPtr& network);
+
+IE_SUPPRESS_DEPRECATED_END
 
 }  // namespace Builder
 

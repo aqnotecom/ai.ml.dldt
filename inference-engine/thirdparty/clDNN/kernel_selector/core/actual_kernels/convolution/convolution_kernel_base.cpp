@@ -1,5 +1,5 @@
 /*
-// Copyright (c) 2016 Intel Corporation
+// Copyright (c) 2016-2020 Intel Corporation
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -30,16 +30,17 @@ bool ConvolutionKernelBase::Validate(const Params& p, const optional_params& o) 
     const convolution_params& params = static_cast<const convolution_params&>(p);
     const convolution_optional_params& optParams = static_cast<const convolution_optional_params&>(o);
 
-    bool bSupportedWeightsLayout = false;
-
-    for (WeightsLayout l : GetSupportedWeightLayouts(params)) {
-        bSupportedWeightsLayout |= params.weights.GetLayout() == l;
-    }
+    bool bSupportedWeightsLayout = params.weights.GetLayout() == GetPreferredWeightsLayout(params);
 
     const bool bWeightsOK = bSupportedWeightsLayout || optParams.allowStaticInputReordering;
 
     if (!bWeightsOK) {
         return false;
+    }
+
+    for (auto& fused_op : params.fused_ops) {
+        if (!IsFusedPrimitiveSupported(fused_op))
+            return false;
     }
 
     return true;
@@ -62,33 +63,31 @@ JitConstants ConvolutionKernelBase::GetJitConstants(const convolution_params& pa
         MakeJitConstant("FILTER_ARRAY_NUM", params.split * params.groups),
         MakeJitConstant("INPUT0_OFFSET_WITH_PADDING", input_offset_with_padding),
         MakeJitConstant("DEPTHWISE_SEPARABLE_OPT", params.depthwise_separable_opt),
-        MakeJitConstant("QUANTIZATION_TERM", params.int8_quantization),
         MakeJitConstant("GROUPED", (params.groups > 1) ? 1 : 0),
     });
 
-    if (params.int8_quantization) {
-        mem_consts.AddConstants({MakeJitConstant("W_QF", params.weights_quantization_factors[0])});
-        mem_consts.AddConstants({MakeJitConstant("I_QF", params.input_quantization_factor)});
+    if (params.quantization != QuantizationType::NONE) {
+        mem_consts.AddConstants({MakeJitConstant("QUANTIZATION_TERM", 1)});
     }
 
-    if (params.output_calibration) {
-        assert(params.output_quantization_factor == 1.0f &&
-               "Both per-channel and per-tesnsor output calibration "
-               "factors are present!");
-        mem_consts.AddConstant(MakeJitConstant("CALIBRATION_TERM", params.output_calibration));
-    } else {
-        assert((params.int8_quantization || params.output_quantization_factor == 1.0f) &&
-               "Per-tensor output calibration isn't supported without "
-               "weights quantization yet!");
-
-        // When/if per-tensor output calibration without weights
-        // quantization will be supported, the only way for the kernel to
-        // understand if it's required is by doing '#ifdef O_QF', i.e.
-        // simply checking "O_QF == 1.0f" would still hurt because its pure
-        // existence changes the type in which operations are performed.
-        // Hence, emit the macro conditionally.
-        if (params.output_quantization_factor != 1.0f)
-            mem_consts.AddConstants({MakeJitConstant("O_QF", params.output_quantization_factor)});
+    if (params.quantization == QuantizationType::ASYMMETRIC_DATA_AND_WEIGHTS || params.quantization == QuantizationType::ASYMMETRIC_DATA) {
+        mem_consts.AddConstants({MakeJitConstant("ASYMMETRIC_DATA_QUANTIZATION", 1)});
+        if (!params.activations_zero_points.empty()) {
+            mem_consts.AddConstants({MakeJitConstant("ACTIVATIONS_ZERO_POINTS", params.activations_zero_points[0])});
+        }
+        if (params.HasCompensation()) {
+            mem_consts.AddConstants({MakeJitConstant("COMPENSATION_TERM", 1)});
+            mem_consts.AddConstants({MakeJitConstant("COMPENSATION", params.compensation[0])});
+        }
+    }
+    if (params.quantization == QuantizationType::ASYMMETRIC_DATA_AND_WEIGHTS || params.quantization == QuantizationType::ASYMMETRIC_WEIGHTS) {
+        mem_consts.AddConstants({MakeJitConstant("ASYMMETRIC_WEIGHTS_QUANTIZATION", 1)});
+        if (!params.weights_zero_points.empty()) {
+            mem_consts.AddConstants({MakeJitConstant("WEIGHTS_ZERO_POINTS", params.weights_zero_points[0])});
+        }
+    }
+    if (params.quantization == QuantizationType::SYMMETRIC) {
+        mem_consts.AddConstants({MakeJitConstant("SYMMETRIC_QUANTIZATION", 1)});
     }
 
     if (params.local_convolution) {
@@ -178,7 +177,7 @@ ConvolutionKernelBase::DispatchData ConvolutionKernelBase::SetDefault(const conv
         global = {out.Feature().v * out.Batch().v, out.X().v, out.Y().v};
     }
 
-    auto local = GetOptimalLocalWorkGroupSizes(global);
+    auto local = GetOptimalLocalWorkGroupSizes(global, params.engineInfo);
 
     kd.gws0 = global[0];
     kd.gws1 = global[1];
@@ -200,7 +199,7 @@ ConvolutionKernelBase::DispatchData ConvolutionKernelBase::SetDefault(const conv
     kd.gemmStyle.subBlockDimK = 1;
     kd.gemmStyle.subBlockDimM = 0;
     kd.gemmStyle.subBlockDimN = 0;
-    kd.effiency = DONT_USE_IF_HAVE_SOMETHING_ELSE;
+    kd.efficiency = DONT_USE_IF_HAVE_SOMETHING_ELSE;
     return kd;
 }
 
@@ -227,9 +226,10 @@ KernelsData ConvolutionKernelBase::GetCommonKernelsData(const Params& params,
 
     bool succeed = UpdateWeightsParams(newParams,
                                        options,
-                                       GetSupportedWeightLayouts(newParams),
+                                       GetPreferredWeightsLayout(newParams),
                                        kd.weightsReorderParams,
-                                       GetSupportedKey());
+                                       GetSupportedKey(),
+                                       newParams.groups);
 
     if (!succeed) {
         return {};
@@ -250,13 +250,18 @@ KernelsData ConvolutionKernelBase::GetCommonKernelsData(const Params& params,
                      exeMode,
                      true,
                      !newParams.bias.empty(),
-                     1,
-                     newParams.int8_quantization,
-                     newParams.output_calibration);
+                     1);
 
     if (newParams.deformable_mode) {
         kernel.arguments.push_back({ArgumentDescriptor::Types::INPUT, 1});
     }
+
+    if (!newParams.weights_zero_points.empty())
+        kernel.arguments.push_back({ArgumentDescriptor::Types::WEIGHTS_ZERO_POINTS, 1});
+    if (!newParams.activations_zero_points.empty())
+        kernel.arguments.push_back({ArgumentDescriptor::Types::ACTIVATIONS_ZERO_POINTS, 1});
+    if (!newParams.compensation.empty())
+        kernel.arguments.push_back({ArgumentDescriptor::Types::COMPENSATION, 1});
 
     uint32_t fused_deps_total = 0;
     for (auto& fused_dep : newParams.fused_ops) {
@@ -267,7 +272,7 @@ KernelsData ConvolutionKernelBase::GetCommonKernelsData(const Params& params,
     }
     kernel.arguments.push_back({ArgumentDescriptor::Types::SPLIT, 0});
 
-    kd.estimatedTime = runInfo.effiency;
+    kd.estimatedTime = runInfo.efficiency;
     kd.autoTuneIndex = autoTuneIndex;
 
     return {kd};
@@ -387,6 +392,69 @@ KernelsData ConvolutionKernelBase::GetKernelsDataForAutoTune(const Params& param
 JitConstants ConvolutionKernelBase::GetFusedPrimitivesJitConstants(const convolution_params& /*params*/,
                                                                    const DispatchData& /*kd*/) const {
     return {};
+}
+
+
+Datatype ConvolutionKernelBase::GetPackedType(Datatype dt, size_t pack_size) const {
+    if (dt == Datatype::UINT8) {
+        return pack_size == 4 ? Datatype::UINT32 : pack_size == 2 ? Datatype::UINT16 : dt;
+    } else if (dt == Datatype::INT8) {
+        return pack_size == 4 ?  Datatype::INT32 : pack_size == 2 ? Datatype::INT16 : dt;
+    } else {
+        return dt;
+    }
+}
+
+Datatype ConvolutionKernelBase::GetPackedInputType(const convolution_params& params) const {
+    return GetPackedType(params.inputs[0].GetDType());
+}
+
+Datatype ConvolutionKernelBase::GetPackedOutputType(const convolution_params& params) const {
+    return GetPackedType(params.output.GetDType());
+}
+
+Datatype ConvolutionKernelBase::GetActivationType(const convolution_params& params) const {
+    bool quantized_weights = false;
+    bool quantized_inputs = false;
+
+    if (params.inputs[0].GetDType() == Datatype::UINT8 ||
+        params.inputs[0].GetDType() == Datatype::INT8)
+        quantized_inputs = true;
+
+    if (params.weights.GetDType() == WeightsType::UINT8 ||
+        params.weights.GetDType() == WeightsType::INT8)
+        quantized_weights = true;
+
+    if (params.quantization != QuantizationType::NONE || quantized_inputs || quantized_weights)
+        return Datatype::F32;
+
+    return GetUnitType(params);
+}
+
+Datatype ConvolutionKernelBase::GetAccumulatorType(const convolution_params& params) const {
+    if (params.quantization != QuantizationType::NONE)
+        return Datatype::INT32;
+
+    bool quantized_weights = false;
+    bool quantized_inputs = false;
+
+    if (params.inputs[0].GetDType() == Datatype::UINT8 ||
+        params.inputs[0].GetDType() == Datatype::INT8)
+        quantized_inputs = true;
+
+    if (params.weights.GetDType() == WeightsType::UINT8 ||
+        params.weights.GetDType() == WeightsType::INT8)
+        quantized_weights = true;
+
+    // This case should be always false, because quantization type is not NONE
+    if (quantized_inputs && quantized_weights)
+        return Datatype::INT32;
+
+    // If we either weights or input is quantized, then we use fp32 accumulator to avoid fp16 overflow
+    if (quantized_inputs || quantized_weights)
+        return Datatype::F32;
+
+    return params.inputs[0].GetDType();
 }
 
 }  // namespace kernel_selector

@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2019 Intel Corporation
+// Copyright (C) 2018-2020 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -40,10 +40,13 @@ private:
     std::vector<ptrdiff_t> dilation;
     std::vector<ptrdiff_t> paddingR;
     MKLDNNDims weightsDims;
-    static Register<MKLDNNDeconvolutionNode> reg;
     InferenceEngine::Blob::Ptr biases;
     std::vector<std::shared_ptr<mkldnn::convolution_forward::desc>> descs_fwd;
     std::vector<std::shared_ptr<mkldnn::convolution_backward_data::desc>> descs_bwd;
+
+    mkldnn::primitive_attr attr;
+    std::vector<MKLDNNMemoryPtr> PostOpsIntBlobMemory;
+    void setBiasAsPostOp();
 };
 
 }  // namespace MKLDNNPlugin

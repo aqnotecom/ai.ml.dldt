@@ -1,5 +1,5 @@
 """
- Copyright (c) 2019 Intel Corporation
+ Copyright (C) 2018-2020 Intel Corporation
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -62,7 +62,7 @@ class MulFakeQuantizeFuse(MiddleReplacementPattern):
     def pattern(self):
         return dict(
             nodes=[
-                ('preop', dict(op='Mul')),
+                ('preop', dict(op='Mul', can_be_fused=True)),
                 ('preoped', dict()),
                 ('quantize', dict(op='FakeQuantize', keep_in_IR=True)),
             ],
@@ -77,10 +77,12 @@ class MulFakeQuantizeFuse(MiddleReplacementPattern):
         preop = match['preop']
 
         tensor_port, value_port = get_tensor_in_port(preop), get_value_in_port(preop)
-        mul_val = value_port.data.get_value()
-        if mul_val is None:
+
+        if value_port is None or value_port.data.get_value() is None:
             log.debug('MulQuantizeFuse: cannot fuse because Mul op has dynamic inputs')
             return
+
+        mul_val = value_port.data.get_value()
 
         # Direct modifications to quantize 1-st and 2-nd port inputs are performed.
         # So the data nodes at those inputs shouldn't have more than 1 consumer maximum 2 consumers to the same

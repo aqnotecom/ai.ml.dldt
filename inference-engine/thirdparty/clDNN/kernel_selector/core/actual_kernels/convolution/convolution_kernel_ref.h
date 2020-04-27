@@ -30,17 +30,19 @@ public:
     ParamsKey GetSupportedKey() const override;
 
 protected:
-    std::vector<WeightsLayout> GetSupportedWeightLayouts(const convolution_params&) const override {
-        return {
-            WeightsLayout::oiyx,
-            WeightsLayout::yxio,
-            WeightsLayout::iyxo,
-            WeightsLayout::oyxi,
-            WeightsLayout::bf_lyx_yx,
-            WeightsLayout::oizyx,
-            WeightsLayout::o_i_zyx_i16_o16,
-        };
+    WeightsLayout GetPreferredWeightsLayout(const convolution_params &params) const override {
+        if (params.inputs[0].Dimentions() == 4)
+            return (params.groups > 1) ? WeightsLayout::goiyx : WeightsLayout::oiyx;
+        else
+            return (params.groups > 1) ? WeightsLayout::goizyx : WeightsLayout::oizyx;
     }
+    std::vector<FusedOpType> GetSupportedFusedOps() const override {
+        return { FusedOpType::ELTWISE,
+                 FusedOpType::QUANTIZE,
+                 FusedOpType::SCALE,
+                 FusedOpType::ACTIVATION };
+    }
+
     JitConstants GetJitConstants(const convolution_params& params, const DispatchData& kd) const override;
     DispatchData SetDefault(const convolution_params& params, int autoTuneIndex = -1) const override;
     bool Validate(const Params& params, const optional_params& options) const override;

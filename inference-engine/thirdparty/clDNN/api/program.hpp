@@ -24,6 +24,8 @@
 #include <memory>
 #include <vector>
 #include <string>
+#include <map>
+#include <utility>
 
 namespace cldnn {
 
@@ -40,6 +42,9 @@ enum class build_option_type {
 
     /// @brief Enable implicit reordering for user inputs (default: false).
     optimize_data,
+
+    /// @brief Enable implicit static input reordering for user inputs (default: false).
+    allow_static_input_reorder,
 
     /// @brief Enable running detection output layer always on gpu, regardless performance
     detection_output_gpu,
@@ -66,7 +71,8 @@ enum class build_option_type {
     graph_dumps_dir,
     /// @brief Name for serialization process
     serialize_network,
-    load_program
+    load_program,
+    force_implementations
 };
 
 /// @brief Tuning mode.
@@ -78,7 +84,15 @@ enum class tuning_mode {
     tuning_use_cache,
 
     /// @brief Tuning using the cached data if exist, tune and update cache otherwise.
-    tuning_tune_and_cache
+    tuning_tune_and_cache,
+
+    /// @brief Tuning using the cached data and update tasks.
+    /// @details Performs updating tasks like removal of invalid caches, promoting to new format, etc.
+    /// No tuning for non-existing data.
+    tuning_use_and_update,
+
+    /// @brief Retune the cache data even if it exists.
+    tuning_retune_and_cache
 };
 
 /// @brief Tuning configuration.
@@ -97,6 +111,14 @@ struct learning_params {
     learning_params() : momentum(0.9f), weights_decay(0.0005f) {}
 };
 
+/// @brief Description of primitives implementation.
+struct implementation_desc {
+    format::type output_format;  ///< Output format.
+    std::string kernel_name;  ///< GPU kernel name.
+};
+
+using implementation_forcing_map = std::map<primitive_id, implementation_desc>;
+
 /// @brief Represents user-provided program build option.
 struct build_option {
     /// @brief Allow primitives fusing during program build (default: false).
@@ -104,6 +126,9 @@ struct build_option {
 
     /// @brief Enable implicit reordering for user inputs (default: false).
     static std::shared_ptr<const build_option> optimize_data(bool enable = false);
+
+    /// @brief Enable implicit reordering for static user inputs (default: false).
+    static std::shared_ptr<const build_option> allow_static_input_reorder(bool enable = false);
 
     /// @brief Enable running detection output layer always on GPU, regardless performance (default: false).
     static std::shared_ptr<const build_option> detection_output_gpu(bool enable = false);
@@ -134,6 +159,8 @@ struct build_option {
 
     /// @brief User defined learning parameters.
     static std::shared_ptr<const build_option> learning_config(const learning_params& params = learning_params());
+    /// @brief Specifies user defined implementation details to use.
+    static std::shared_ptr<const build_option> force_implementations(implementation_forcing_map forcing);
 
     virtual ~build_option() = default;
 
@@ -258,6 +285,17 @@ private:
     build_option_load_program& operator=(const build_option_load_program& other) = delete;
 };
 
+struct build_option_force_implementations : build_option {
+    implementation_forcing_map forcing;
+
+    explicit build_option_force_implementations(implementation_forcing_map _forcing) : forcing(std::move(_forcing)) {}
+private:
+    build_option_type get_type() const override { return build_option_type::force_implementations; }
+
+    build_option_force_implementations(const build_option_force_implementations& other) = delete;
+    build_option_force_implementations& operator=(const build_option_force_implementations& other) = delete;
+};
+
 namespace detail {
 /// @brief Helper template to convert @ref build_option_type value to particular @ref build_option class.
 template <build_option_type OptType>
@@ -278,6 +316,11 @@ template <>
 struct build_option_traits<build_option_type::optimize_data> {
     typedef build_option_bool<build_option_type::optimize_data> object_type;
     static std::shared_ptr<const build_option> make_default() { return build_option::optimize_data(); }
+};
+template <>
+struct build_option_traits<build_option_type::allow_static_input_reorder> {
+    typedef build_option_bool<build_option_type::allow_static_input_reorder> object_type;
+    static std::shared_ptr<const build_option> make_default() { return build_option::allow_static_input_reorder(); }
 };
 template <>
 struct build_option_traits<build_option_type::detection_output_gpu> {
@@ -319,6 +362,11 @@ struct build_option_traits<build_option_type::load_program> {
     typedef build_option_load_program<build_option_type::load_program> object_type;
     static std::shared_ptr<const build_option> make_default() { return build_option::load_program({}); }
 };
+template <>
+struct build_option_traits<build_option_type::force_implementations> {
+    using object_type = build_option_force_implementations;
+    static std::shared_ptr<const build_option> make_default() { return build_option::force_implementations({}); }
+};
 
 #endif
 }  // namespace detail
@@ -330,6 +378,10 @@ inline std::shared_ptr<const build_option> build_option::fusing(bool enable) {
 
 inline std::shared_ptr<const build_option> build_option::optimize_data(bool enable) {
     return std::make_shared<build_option_bool<build_option_type::optimize_data>>(enable);
+}
+
+inline std::shared_ptr<const build_option> build_option::allow_static_input_reorder(bool enable) {
+    return std::make_shared<build_option_bool<build_option_type::allow_static_input_reorder>>(enable);
 }
 
 inline std::shared_ptr<const build_option> build_option::detection_output_gpu(bool enable) {
@@ -360,6 +412,9 @@ inline std::shared_ptr<const build_option> build_option::serialize_network(const
 }
 inline std::shared_ptr<const build_option> build_option::load_program(const std::string& name) {
     return std::make_shared<build_option_load_program<build_option_type::load_program>>(name);
+}
+inline std::shared_ptr<const build_option> build_option::force_implementations(implementation_forcing_map forcing) {
+    return std::make_shared<build_option_force_implementations>(std::move(forcing));
 }
 #endif
 

@@ -1,5 +1,5 @@
 /*
-// Copyright (c) 2016 Intel Corporation
+// Copyright (c) 2016-2020 Intel Corporation
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -32,8 +32,7 @@ ParamsKey ConvolutionKernel_mmad_slm_7x7_rep4::GetSupportedKey() const {
     k.EnableBiasPerOutput();
     k.EnableNonBiasTerm();
     k.EnableBatching();
-    k.EnableInt8Quantization();
-    k.EnableOutputCalibration();
+    k.EnableQuantization(QuantizationType::SYMMETRIC);
     k.DisableTuning();
     return k;
 }
@@ -64,7 +63,7 @@ ConvolutionKernelBase::DispatchData ConvolutionKernel_mmad_slm_7x7_rep4::SetDefa
                                                                                     int) const {
     DispatchData runInfo = ConvolutionKernelBase::SetDefault(arg);
 
-    runInfo.effiency = FORCE_PRIORITY_1;
+    runInfo.efficiency = FORCE_PRIORITY_1;
 
     const size_t rep_count = 4;
     const size_t batch_per_wi = 4;

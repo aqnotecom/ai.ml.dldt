@@ -1,5 +1,5 @@
 """
- Copyright (c) 2019 Intel Corporation
+ Copyright (C) 2018-2020 Intel Corporation
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
 """
 from extensions.middle.BinarizeWeightsM1P1 import BinarizeWeightsM1P1
 from extensions.middle.DeleteControlFlowEdges import DeleteControlFlowEdges
+from extensions.middle.EltwiseChecker import EltwiseChecker
 from mo.graph.graph import Graph
 from mo.middle.replacement import MiddleReplacementPattern
 
@@ -35,7 +36,11 @@ class MarkNodesToFuseUpToFakeQuantize(MiddleReplacementPattern):
         return []
 
     def find_and_replace_pattern(self, graph: Graph):
-        eltwise_nodes = graph.get_op_nodes(op='Mul') + graph.get_op_nodes(op='Sub') + graph.get_op_nodes(op='Add')
+        # to prevent fusing of non per channel lin ops, we run EltwiseChecker to mark nodes with can_be_fused attribute
+        EltwiseChecker().find_and_replace_pattern(graph)
+        eltwise_nodes = graph.get_op_nodes(op='Mul', can_be_fused=True) + \
+                        graph.get_op_nodes(op='Sub', can_be_fused=True) + \
+                        graph.get_op_nodes(op='Add', can_be_fused=True)
         for elt in eltwise_nodes:
             if elt.in_port(0).data.get_value() is not None or elt.in_port(1).data.get_value() is not None:
                 elt['fuse_up_to_quantize_ports'] = [3, 4]
@@ -99,3 +104,16 @@ class FakeQuantizeFuse(MiddleReplacementPattern):
                     fuse_node_duplicate.infer(fuse_node_duplicate)
 
                     first_port_fusion = False
+
+            if 'permutation' in quantize_node.in_edge(0):
+                permutation = quantize_node.in_edge(0)['permutation']
+                if permutation is None:
+                    continue
+
+                perm_rank = permutation.perm.size
+
+                if not all([quantize_node.in_port(i).data.get_shape().size == perm_rank for i in range(1, 5)]):
+                    continue
+
+                for i in range(1, 5):
+                    quantize_node.in_edge(i)['permutation'] = permutation

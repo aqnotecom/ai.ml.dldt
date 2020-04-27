@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
- Copyright (C) 2018-2019 Intel Corporation
+ Copyright (C) 2018-2020 Intel Corporation
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -21,8 +21,7 @@ from argparse import ArgumentParser, SUPPRESS
 import cv2
 import numpy as np
 import logging as log
-from time import time
-from openvino.inference_engine import IENetwork, IECore
+from openvino.inference_engine import IECore
 import threading
 
 
@@ -107,7 +106,7 @@ def main():
         ie.add_extension(args.cpu_extension, "CPU")
     # Read IR
     log.info("Loading network files:\n\t{}\n\t{}".format(model_xml, model_bin))
-    net = IENetwork(model=model_xml, weights=model_bin)
+    net = ie.read_network(model=model_xml, weights=model_bin)
 
     if "CPU" in args.device:
         supported_layers = ie.query_network(net, "CPU")
@@ -149,7 +148,7 @@ def main():
     num_iter = 10
     request_wrap = InferReqWrap(infer_request, request_id, num_iter)
     # Start inference request execution. Wait for last execution being completed
-    request_wrap.execute("sync", {input_blob: images})
+    request_wrap.execute("async", {input_blob: images})
 
     # Processing output blob
     log.info("Processing output blob")

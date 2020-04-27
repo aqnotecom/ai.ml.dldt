@@ -25,6 +25,7 @@
 #include "scale_inst.h"
 #include "tensor_type.h"
 #include <memory>
+#include <vector>
 #include <stdexcept>
 
 /*
@@ -35,7 +36,7 @@ If not than required reorder is added to the network.
 /*
 Add a reorder in between node and usr with reorder_layout as layout
 */
-void add_required_reorders::add_reorder(program_impl& p, program_node* node, program_node* usr, layout reorder_layout) {
+void add_required_reorders::add_reorder(program_impl& p, program_node* node, program_node* usr, const layout& reorder_layout) {
     auto new_reorder = std::make_shared<reorder>(node->id() + "_reorder_" + usr->id(), node->id(), reorder_layout);
     auto& new_reorder_node = p.get_or_create(new_reorder);
 
@@ -62,13 +63,11 @@ void add_required_reorders::run(program_impl& p) {
         if (usr->type()->does_an_implementation_exist(p.get_engine(), *usr))
             continue;
 
-        /*
-            First check if there are non data flow dependencies for the primitive
-            if so then choose the same output format as the data
-        */
         bool correct_layout_selected = false;
+        bool weights_data = (usr->is_type<convolution>() || usr->is_type<deconvolution>() ||
+                             usr->is_type<deformable_conv>() || usr->is_type<fully_connected>());
         for (auto& node : usr->get_dependencies()) {
-            if (!node->is_in_data_flow()) {
+            if (!node->is_in_data_flow() && !weights_data) {
                 /*
                     ToDo: Here we should handle also the situation where primitive usr has data inputs in different
                    formats
@@ -81,21 +80,32 @@ void add_required_reorders::run(program_impl& p) {
                     correct_layout_selected = true;
                     break;
                 } else {
-                    throw std::runtime_error("Internal Error: no layout format available for " + usr->id() + " comaptible with " +
-                                    node->id());
+                    throw std::runtime_error("Internal Error: no layout format available for " + usr->id() +
+                                             " (format: " + std::to_string(usr->get_output_layout().format.value) + " )"
+                                             "compatible with " + node->id() +
+                                             " (format: " + std::to_string(node->get_output_layout().format.value) + ")");
                 }
             }
         }
 
         if (!correct_layout_selected) {
+            std::vector<cldnn::format> preffered_layout_formats;
+            size_t max_in_dims = 4;
+            for (auto& node : usr->get_dependencies()) {
+                max_in_dims = std::max(cldnn::format::dimension(node->get_output_layout().format), max_in_dims);
+            }
             // This list of preffered layouts has been selected arbitrary due to developers' experience
-            cldnn::format preffered_layout_formats[]{
-                // TODO: [block_formats] - verify if it is really needed
-                cldnn::format::bfyx_f16,
-                cldnn::format::bfyx,
-                cldnn::format::yxfb,
-                cldnn::format::byxf,
-            };
+            if (max_in_dims == 5) {
+                preffered_layout_formats = {
+                    cldnn::format::bfzyx,
+                };
+            } else if (max_in_dims == 4) {
+                preffered_layout_formats = {
+                    cldnn::format::bfyx,
+                    cldnn::format::yxfb,
+                    cldnn::format::byxf,
+                };
+            }
 
             for (auto new_layout_format : preffered_layout_formats) {
                 layout current_layout(usr->get_output_layout().data_type,

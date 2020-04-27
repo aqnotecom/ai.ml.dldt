@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2019 Intel Corporation
+// Copyright (C) 2018-2020 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -9,9 +9,11 @@
 #include <vector>
 #include <string>
 #include <map>
+#include <cassert>
 #include <algorithm>
 #include <ie_common.h>
 #include <ie_profiling.hpp>
+#include <ie_layers_property.hpp>
 #include "details/caseless.hpp"
 #include "mkldnn_dims.h"
 #include "mkldnn_memory.h"
@@ -26,6 +28,11 @@ namespace MKLDNNPlugin {
 
 using MKLDNNNodePtr = std::shared_ptr<MKLDNNNode>;
 using MKLDNNNodeWeakPtr = std::weak_ptr<MKLDNNNode>;
+
+using CreatorByLayerFunction = std::function<MKLDNNNode *(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng, int socket)>;
+struct MKLDNNNodesHolder {
+    std::map<std::string, CreatorByLayerFunction> nodes;
+};
 
 enum Type {
     Unknown,
@@ -62,72 +69,13 @@ enum Type {
     Quantize,
     BinaryConvolution,
     DeformableConvolution,
-    TensorIterator
+    TensorIterator,
+    Convert,
+    MVN,
+    Resample
 };
 
-static Type TypeFromName(const std::string type) {
-    static InferenceEngine::details::caseless_unordered_map<std::string, Type> type_to_name_tbl = {
-            { "Unknown", Unknown },
-            { "Input", Input },
-            { "Const", Input },
-            { "Output", Output },
-            { "Reorder", Reorder },
-            { "Convolution", Convolution },
-            { "ReLU", Activation },
-            { "ELU", Activation },
-            { "Sigmoid", Activation },
-            { "Logistic", Activation },
-            { "TanH", Activation },
-            { "ReLU6", Activation },
-            { "Exp", Activation },
-            { "Not", Activation },
-            { "Activation", Activation },
-            { "ScaleShift", Depthwise },
-            { "PReLU", Depthwise },
-            { "Clamp", Activation },
-            { "Norm", Lrn },
-            { "LRN", Lrn },
-            { "Pooling", Pooling },
-            { "FullyConnected", FullyConnected },
-            { "InnerProduct", FullyConnected },
-            { "Gemm", Gemm },
-            { "Softmax", SoftMax },
-            { "SoftMax", SoftMax },
-            { "Split", Split },
-            { "Slice", Split },
-            { "Concat", Concatenation },
-            { "Power", Power },
-            { "Deconvolution", Deconvolution },
-            { "Eltwise", Eltwise },
-            { "Crop", Crop },
-            { "Reshape", Reshape },
-            { "Tile", Tile },
-            { "SimplerNMS", SimplerNMS },
-            { "ROIPooling", ROIPooling },
-            { "BatchNormalization", BatchNormalization },
-            { "Flatten", Flatten },
-            { "Permute", Permute },
-            { "Copy", Copy },
-            { "LSTMCell", RNNCell },
-            { "GRUCell", RNNCell },
-            { "RNNCell", RNNCell },
-            { "LSTMSequence", RNNSeq },
-            { "GRUSequence", RNNSeq },
-            { "RNNSequence", RNNSeq },
-            { "Quantize", Quantize },
-            { "BinaryConvolution", BinaryConvolution },
-            { "DeformableConvolution", DeformableConvolution },
-            { "TensorIterator", TensorIterator },
-            { "MemoryInput", MemoryInput},  // for construction from name ctor, arbitrary name is used
-            { "Memory", MemoryOutput },  // for construction from layer ctor
-    };
-
-    if (type_to_name_tbl.find(type) != type_to_name_tbl.end()) {
-        return type_to_name_tbl[type];
-    } else {
-        return Unknown;
-    }
-}
+Type TypeFromName(const std::string type);
 
 static std::string NameFromType(Type type) {
     switch (type) {
@@ -197,8 +145,14 @@ static std::string NameFromType(Type type) {
             return "BinaryConvolution";
         case DeformableConvolution:
             return "DeformableConvolution";
+        case MVN:
+            return "MVN";
         case TensorIterator:
             return "TensorIterator";
+        case Convert:
+            return "Convert";
+        case Resample:
+            return "Resample";
         default:
             return "Unknown";
     }
@@ -261,6 +215,9 @@ private:
 
 class MKLDNNNode : public InferenceEngine::details::no_copy {
 public:
+    static void AddNode(const std::string& name, CreatorByLayerFunction factory);
+    static std::shared_ptr<MKLDNNNodesHolder> GetNodesHolder();
+
     static MKLDNNNode* CreateNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng,
                                   const MKLDNNExtensionManager::Ptr& extMgr, int socket = 0);
 
@@ -302,6 +259,10 @@ public:
 
     void fuseWith(const MKLDNNNodePtr &fuse) {
         fusedWith.push_back(fuse);
+    }
+
+    void clearFusedWith() {
+        fusedWith.clear();
     }
 
     void mergeWith(const MKLDNNNodePtr &merge) {
@@ -382,6 +343,12 @@ public:
         return created();
     }
 
+    /**
+     * @brief Performs Node initialization based on graph context.
+     * This is an auxiliary method that allows to use information not available in Node constructor (e.g. connection information with other nodes)
+     */
+    virtual void init() {}
+
     template <class PD, class D, typename FPD = bool>
     PD createPrimitiveDescriptor(const mkldnn::primitive_attr &attr = mkldnn::primitive_attr()) {
         auto descsEqual = [](const std::vector<InferenceEngine::TensorDesc>& srcDescs,
@@ -406,11 +373,11 @@ public:
 
             while (itpd.is_not_end())  {
                 std::vector<InferenceEngine::TensorDesc> srcDescs;
-                for (size_t i = 0; i < desc.inputNumbers(); i++)
+                for (size_t i = 0; i < descInputNumbers(desc); i++)
                     srcDescs.push_back(getSrcMemDesc(itpd, i));
 
                 std::vector<InferenceEngine::TensorDesc> dstDescs;
-                for (size_t i = 0; i < desc.outputNumbers(); i++)
+                for (size_t i = 0; i < descOutputNumbers(desc); i++)
                     dstDescs.push_back(getDstMemDesc(itpd, i));
 
                 impl_desc_type impl_type = parse_impl_name(itpd.get_impl_info_str());
@@ -447,6 +414,27 @@ public:
         return typeStr;
     }
 
+    virtual size_t descInputNumbers(MKLDNNDescriptor desc) {
+        return desc.inputNumbers();
+    }
+
+    virtual size_t descOutputNumbers(MKLDNNDescriptor desc) {
+        return desc.outputNumbers();
+    }
+
+    template<typename To>
+    class Register {
+    public:
+        explicit Register(const std::string& type) {
+            MKLDNNNode::AddNode(type,
+                    [](const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng, int socket)
+                    -> MKLDNNNode* {
+                        return new To(layer, eng, socket);
+                    });
+        }
+    };
+
+
 protected:
     // TODO: It is necessary only in order to avoid modifications of cnnLayers and original topology
     std::vector<MKLDNNDims> outDims;
@@ -462,6 +450,12 @@ protected:
     virtual MKLDNNMemoryDesc getSrcMemDesc(mkldnn::primitive_desc_iterator &primitive_desc_it, size_t idx);
     virtual MKLDNNMemoryDesc getDstMemDesc(mkldnn::primitive_desc_iterator &primitive_desc_it, size_t idx);
 
+    /**
+     * @brief Appends new item into ops list with the information on how the node should be executed as post operation.
+     * Seed node should call this routine and pass its post operations list as parameter.
+     * @param ops List of fused post operations
+     */
+    virtual void appendPostOps(mkldnn::post_ops& ops);
     virtual std::shared_ptr<mkldnn::primitive_attr> initPrimitiveAttr() const { return nullptr; }
 
     typedef std::function<MKLDNNMemoryDesc (mkldnn::primitive_desc_iterator &primitive_desc_it, size_t idx)>
@@ -516,18 +510,9 @@ protected:
     //       Remove this flag when graph clone functionality will be added.
     void enableWeightCaching(bool val) { weight_caching = val; }
 
-    InferenceEngine::Blob::Ptr createInternalBlob(InferenceEngine::SizeVector dims, bool weights);
+    InferenceEngine::Blob::Ptr createInternalBlob(InferenceEngine::SizeVector dims, bool weights, bool is_grouped = false);
 
-    template<typename To>
-    class Register {
-    public:
-        Register() {
-            Registry::RegisterNode(
-                Registry::CreatorByLayerFunction(
-                        [](const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng, int socket)
-                        -> MKLDNNNode* { return new To(layer, eng, socket); } ) );
-        }
-    };
+    InferenceEngine::Layout getWeightsLayoutByDims(InferenceEngine::SizeVector dims, bool isGrouped);
 
 private:
     std::vector<MKLDNNEdgeWeakPtr> parentEdges;
@@ -550,19 +535,6 @@ private:
 
     bool isEdgesEmpty(const std::vector<MKLDNNEdgeWeakPtr>& edges) const;
 
-    class Registry {
-    public:
-        typedef std::function<MKLDNNNode *(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng, int socket)> CreatorByLayerFunction;
-
-        static MKLDNNNode *CreateNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng,
-                                      const MKLDNNExtensionManager::Ptr& extMgr,
-                                      int socket = 0);
-
-        static void RegisterNode(CreatorByLayerFunction f);
-    private:
-        static std::vector<CreatorByLayerFunction> _dataByLayer;
-    };
-
     template <class PD, class D, typename FPD>
     typename std::enable_if<!std::is_same<FPD, bool>::value, PD>::type
     createPd(MKLDNNDescriptor desc) {
@@ -582,6 +554,9 @@ private:
     enum LOOK { LOOK_UP = 1, LOOK_DOWN = 2 };
     ConstantType checkConstant(LOOK look, std::vector<MKLDNNNodePtr>& checkNodes);
 };
+
+#define REG_MKLDNN_PRIM_FOR(__prim, __type) \
+static MKLDNNNode::Register<__prim> __reg__##__type(#__type)
 
 template <typename T, typename U>
 inline T div_up(const T a, const U b) {

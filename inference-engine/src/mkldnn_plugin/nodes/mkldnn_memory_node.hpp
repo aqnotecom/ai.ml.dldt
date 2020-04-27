@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2019 Intel Corporation
+// Copyright (C) 2018-2020 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -30,35 +30,37 @@ class MKLDNNMemoryNode {
     virtual void setInputNode(MKLDNNNode *) = 0;
 };
 class MKLDNNMemoryOutputNode;
+#if defined (COMPILED_CPU_MKLDNN_INPUT_NODE)
 class MKLDNNMemoryInputNode;
+#endif
 
 /**
  * @brief
  * TODO: ATTENTION: this is a temporary solution, this connection should be keep in graph
+ * WARNING: thread_local and holderMutex are not needed if moved into graph
  */
 class MKLDNNMemoryNodeVirtualEdge {
+ public:
     using Holder = std::map<std::string, MKLDNNMemoryNode*>;
     static Holder & getExisted() {
-        static Holder existed;
+        thread_local static Holder existed;
         return existed;
     }
 
-    static MKLDNNMemoryNode * getByName(std::string name) {
-        auto result = getExisted().find(name);
-        if (result != getExisted().end()) {
+    static MKLDNNMemoryNode * getByName(Holder& holder, std::string name) {
+        auto result = holder.find(name);
+        if (result != holder.end()) {
             return result->second;
         }
         return nullptr;
     }
 
- public:
-    static void registerOutput(MKLDNNMemoryOutputNode * node);
-    static void registerInput(MKLDNNMemoryInputNode * node);
-    static void remove(MKLDNNMemoryNode * node) {
-        InferenceEngine::details::erase_if(getExisted(), [&](const Holder::value_type & it){
-            return it.second == node;
-        });
-    }
+    static Holder* registerOutput(MKLDNNMemoryOutputNode * node);
+#if defined (COMPILED_CPU_MKLDNN_INPUT_NODE)
+    static Holder* registerInput(MKLDNNMemoryInputNode * node);
+#endif
+    static void remove(MKLDNNMemoryNode * node, Holder* holder);
+    static std::mutex holderMutex;
 };
 
 class MKLDNNMemoryOutputNode : public MKLDNNNode, public MKLDNNMemoryNode {
@@ -83,8 +85,10 @@ class MKLDNNMemoryOutputNode : public MKLDNNNode, public MKLDNNMemoryNode {
      */
     MKLDNNNode* inputNode = nullptr;
     static Register<MKLDNNMemoryOutputNode> reg;
+    MKLDNNMemoryNodeVirtualEdge::Holder* holder = nullptr;
 };
 
+#if defined (COMPILED_CPU_MKLDNN_INPUT_NODE)
 class MKLDNNMemoryInputNode : public MKLDNNInputNode, public MKLDNNMemoryNode {
 public:
     MKLDNNMemoryInputNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng, int socket);
@@ -97,7 +101,9 @@ public:
     void setInputNode(MKLDNNNode* node) override {}
  private:
     static Register<MKLDNNMemoryInputNode> reg;
+    MKLDNNMemoryNodeVirtualEdge::Holder* holder = nullptr;
 };
+#endif
 
 }  // namespace MKLDNNPlugin
 

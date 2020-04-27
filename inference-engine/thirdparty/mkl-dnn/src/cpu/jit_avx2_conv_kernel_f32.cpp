@@ -15,6 +15,7 @@
 * limitations under the License.
 *******************************************************************************/
 
+#include <common/primitive_attr.hpp>
 #include "c_types_map.hpp"
 #include "nstl.hpp"
 #include "type_helpers.hpp"
@@ -286,6 +287,7 @@ void jit_avx2_conv_fwd_kernel_f32::width_blk_step(int ur_w,
 
     int eltwise_inj_idx = 0;
     int depthwise_inj_idx = 0;
+    int quantization_inj_idx = 0;
     const auto &p = attr_.post_ops_;
 
     int end_idx = jcp.with_dw_conv ? p.find(primitive_kind::convolution) : p.len_;
@@ -310,7 +312,39 @@ void jit_avx2_conv_fwd_kernel_f32::width_blk_step(int ur_w,
             }
 
             depthwise_inj_idx++;
+        } else if (post_op.is_quantization()) {
+            quantization_injectors[quantization_inj_idx]->init_crop_ptrs(ptr[this->param1 + GET_OFF(oc_off)]);
+            for (int ii = 0; ii < oc_blocks; ii++) {
+                int s_idx = Ymm(ur_w * ii).getIdx();
+                quantization_injectors[quantization_inj_idx]->compute_crop(s_idx, s_idx + ur_w, ii * jcp.oc_block * sizeof(float));
+            }
+
+            quantization_injectors[quantization_inj_idx]->init_input_scale_shift_ptrs(ptr[this->param1 + GET_OFF(oc_off)]);
+            for (int ii = 0; ii < oc_blocks; ii++) {
+                int s_idx = Ymm(ur_w * ii).getIdx();
+                quantization_injectors[quantization_inj_idx]->compute_input_scale_shift(s_idx, s_idx + ur_w, ii * jcp.oc_block * sizeof(float), true);
+            }
+
+            quantization_injectors[quantization_inj_idx]->init_output_scale_shift_ptrs(ptr[this->param1 + GET_OFF(oc_off)]);
+            for (int ii = 0; ii < oc_blocks; ii++) {
+                int s_idx = Ymm(ur_w * ii).getIdx();
+                quantization_injectors[quantization_inj_idx]->compute_output_scale_shift(s_idx, s_idx + ur_w, ii * jcp.oc_block * sizeof(float));
+            }
+
+            quantization_inj_idx++;
         }
+//        } else if (post_op.is_sum()) {
+//            for (int ii = 0; ii < oc_blocks; ii++) {
+//                for (int jj = 0; jj < ur_w; jj++) {
+//                    Ymm ymm_dst = Ymm(ur_w * ii + jj);
+//
+//                    size_t o_off = sizeof(float) * ((size_t)ii * od * oh * ow + jj) * oc_blk;
+//
+//                    vmovups(ymm_sum, make_safe_addr(reg_output, o_off, reg_long_offt));
+//                    vaddps(ymm_dst, ymm_dst, ymm_sum);
+//                }
+//            }
+//        }
     }
 
     L(regular_store);
@@ -407,6 +441,12 @@ void jit_avx2_conv_fwd_kernel_f32::generate()
                     this,
                     post_op.depthwise.alg
             ));
+        } else if (post_op.is_quantization()) {
+            quantization_injectors.push_back(new jit_uni_quantization_injector_f32<avx2>(
+                    this,
+                    post_op,
+                    ymm_d_weights, ymm_d_bias, reg_d_weights, reg_d_bias
+            ));
         }
     }
 
@@ -463,7 +503,8 @@ bool jit_avx2_conv_fwd_kernel_f32::post_ops_ok(
 
         int end_idx = with_dw_conv ? dw_conv_idx : p.len_;
         for (int i = 0; i < end_idx; i++) {
-            ok = ok && utils::one_of(p.entry_[i].kind, primitive_kind::sum, primitive_kind::eltwise, primitive_kind::depthwise);
+            ok = ok && utils::one_of(p.entry_[i].kind, primitive_kind::sum, primitive_kind::eltwise, primitive_kind::depthwise,
+                    primitive_kind::quantization);
         }
         return ok;
     };
@@ -518,6 +559,9 @@ status_t jit_avx2_conv_fwd_kernel_f32::init_conf(jit_conv_conf_t &jcp,
     jcp.dilate_h = (ndims == 3) ? 0 : cd.dilates[ndims-4];
     jcp.dilate_w = cd.dilates[ndims-3];
 
+    jcp.b_pad = (jcp.oh - 1) * jcp.stride_h + (jcp.kh - 1) * (jcp.dilate_h + 1)
+            - (jcp.ih + jcp.t_pad - 1);
+
     jcp.src_fmt = src_d.format();
     jcp.with_bias = cd.bias_desc.format != memory_format::undef;
 
@@ -541,9 +585,6 @@ status_t jit_avx2_conv_fwd_kernel_f32::init_conf(jit_conv_conf_t &jcp,
         jcp.dw_conv_dst_dt = jcp.dst_dt;
         jcp.dst_dt = p.entry_[dw_conv_ind].dw_conv.in_dt;
     }
-
-    jcp.b_pad = (jcp.oh - 1) * jcp.stride_h + (jcp.kh - 1) * (jcp.dilate_h + 1)
-                - (jcp.ih + jcp.t_pad - 1);
 
     if (jcp.with_dw_conv && !mayiuse(avx2))
         return status::unimplemented;
@@ -615,12 +656,19 @@ status_t jit_avx2_conv_fwd_kernel_f32::init_conf(jit_conv_conf_t &jcp,
             // adjust one of nb_oc_block, ur_w preserving to ur_w >= l_pad
             if (jcp.ur_w > jcp.l_pad && jcp.ur_w > 1)
                 jcp.ur_w -= 1;
-            else
-                for (int b = 3; b > 1; b--)
+            else {
+                for (int b = 3; b > 1; b--) {
                     if (jcp.nb_oc % b == 0) {
                         jcp.nb_oc_blocking = b;
                         break;
                     }
+                }
+                if ((jcp.nb_oc_blocking + 1) * jcp.ur_w > num_avail_regs) {
+                    // No optimal size for 'nb_oc_blocking' with regards to
+                    // 'nb_oc', default to only unroll by 'ur_w'.
+                    jcp.nb_oc_blocking = 1;
+                }
+            }
         }
     }
 
@@ -812,7 +860,7 @@ void jit_avx2_conv_bwd_data_kernel_f32::compute_loop(int ur_w, int l_overflow,
         mov(reg_channel, ptr[param1 + GET_OFF(channel)]);
     }
 
-    Label no_update_label;
+    Label no_update_label, skip_post_ops;
     cmp(reg_channel, 0);
     je(no_update_label, T_NEAR);
     for (int ii = 0; ii < nb_ic_block; ii++) {
@@ -826,7 +874,33 @@ void jit_avx2_conv_bwd_data_kernel_f32::compute_loop(int ur_w, int l_overflow,
 
         }
     }
+    jmp(skip_post_ops, T_NEAR);
+
     L(no_update_label);
+    const auto &p = attr_.post_ops_;
+    int depthwise_inj_idx = 0;
+    for (int i = 0; i < p.len_; i++) {
+        auto& post_op = p.entry_[i];
+        if (post_op.is_depthwise()) {
+            push(reg_d_weights);
+            mov(reg_d_weights, reinterpret_cast<size_t>(post_op.depthwise.weights_data));
+            mov(reg_d_bias, reinterpret_cast<size_t>(post_op.depthwise.biases_data));
+
+            add(reg_d_weights, ptr[this->param1 + GET_OFF(ic_off)]);
+            add(reg_d_bias, ptr[this->param1 + GET_OFF(ic_off)]);
+
+            for (int ii = 0; ii < nb_ic_block; ii++) {
+                depthwise_injectors[depthwise_inj_idx]->compute_vector_range(
+                        ur_w * ii, ur_w * ii + ur_w, reg_d_weights, reg_d_bias);
+
+                add(reg_d_weights, jcp.ic_block * sizeof(float));
+                add(reg_d_bias, jcp.ic_block * sizeof(float));
+            }
+            pop(reg_d_weights);
+        }
+        depthwise_inj_idx++;
+    }
+    L(skip_post_ops);
 
     for (int ii = 0; ii < nb_ic_block; ii++)
         for (int jj = 0; jj < ur_w; jj++) {
@@ -838,6 +912,17 @@ void jit_avx2_conv_bwd_data_kernel_f32::compute_loop(int ur_w, int l_overflow,
 }
 
 void jit_avx2_conv_bwd_data_kernel_f32::generate() {
+    const auto &p = attr_.post_ops_;
+    for (int i = 0; i < p.len_; i++) {
+        auto &post_op = p.entry_[i];
+        if (post_op.is_depthwise()) {
+            depthwise_injectors.push_back(new jit_uni_depthwise_injector_f32<avx2>(
+                    this,
+                    post_op.depthwise.alg
+            ));
+        }
+    }
+
     preamble();
 
     mov(reg_dsrc, ptr[this->param1 + GET_OFF(src)]);
@@ -853,8 +938,8 @@ void jit_avx2_conv_bwd_data_kernel_f32::generate() {
     int l_overflow = nstl::max(0, (jcp.kw - 1 - jcp.l_pad) / jcp.stride_w);
     int r_overflow = nstl::max(0, (jcp.kw - 1
                     - nstl::max(0, jcp.r_pad)) / jcp.stride_w);
-    int r_overflow1 = nstl::max(0, (jcp.kw - 1
-                    - nstl::max(0, jcp.r_pad) - jcp.ur_w_tail) / jcp.stride_w);
+    int r_overflow1 = nstl::max(
+            0, (jcp.kw - 1 - jcp.r_pad - jcp.ur_w_tail) / jcp.stride_w);
 
     int n_oi = jcp.iw / jcp.ur_w;
     if (r_overflow1 > 0)
@@ -901,10 +986,27 @@ void jit_avx2_conv_bwd_data_kernel_f32::generate() {
     this->postamble();
 }
 
+bool jit_avx2_conv_bwd_data_kernel_f32::post_ops_ok(const primitive_attr_t &attr) {
+    const auto &p = attr.post_ops_;
+    if (p.len_ > 1)
+        return false;
+
+    auto all_post_ops_supported = [&]() {
+        bool ok = true;
+
+        for (int i = 0; i < p.len_; i++) {
+            ok = ok && utils::one_of(p.entry_[i].kind, primitive_kind::depthwise);
+        }
+        return ok;
+    };
+
+    return all_post_ops_supported();
+}
+
 status_t jit_avx2_conv_bwd_data_kernel_f32::init_conf(jit_conv_conf_t &jcp,
         const convolution_desc_t &cd, const memory_desc_wrapper &diff_src_d,
-        const memory_desc_wrapper &weights_d,
-        const memory_desc_wrapper &diff_dst_d)
+        const memory_desc_wrapper &weights_d, const memory_desc_wrapper &diff_dst_d,
+        const primitive_attr_t &attr)
 {
     if (!mayiuse(avx2)) return status::unimplemented;
 
@@ -944,6 +1046,19 @@ status_t jit_avx2_conv_bwd_data_kernel_f32::init_conf(jit_conv_conf_t &jcp,
     jcp.dilate_w = cd.dilates[ndims-3];
 
     const int simd_w = 8;
+
+    if (!post_ops_ok(attr))
+        return status::unimplemented;
+
+    const auto &p = attr.post_ops_;
+    if (!mayiuse(avx2)) {
+        for (int i = 0; i < p.len_; i++) {
+            auto &post_op = p.entry_[i];
+            if (post_op.is_depthwise()) {
+                return status::unimplemented;
+            }
+        }
+    }
 
     /* derivatives */
     jcp.idp = jcp.id + 2 * jcp.f_pad;
@@ -1042,13 +1157,16 @@ status_t jit_avx2_conv_bwd_data_kernel_f32::init_conf(jit_conv_conf_t &jcp,
 
     jcp.ur_w_tail = jcp.iw % jcp.ur_w;
 
-    int r_overflow_no_tail = nstl::max(0, (jcp.kw - 1 - jcp.ur_w_tail
-                    - nstl::max(0, jcp.r_pad) - jcp.ur_w_tail) / jcp.stride_w);
-    /* maximum 1 ur_w block with r_overflow so far */
-    if (r_overflow_no_tail * jcp.stride_w > jcp.ur_w)
-        return status::unimplemented;
-
-    if ((jcp.iw > jcp.ur_w) && (jcp.ur_w % jcp.stride_w != 0))
+    int r_overflow_no_tail = nstl::max(
+            0, (jcp.kw - 1 - jcp.r_pad - jcp.ur_w_tail) / jcp.stride_w);
+    bool tails_not_ok = false
+            /* maximum 1 ur_w block with r_overflow so far */
+            || r_overflow_no_tail * jcp.stride_w > jcp.ur_w
+            /* ur_w must be a multiple of stride */
+            || ((jcp.iw > jcp.ur_w) && (jcp.ur_w % jcp.stride_w != 0))
+            /* r_pad must not extend beyond ur_w_tail */
+            || ((jcp.iw > jcp.ur_w) && (jcp.r_pad + jcp.ur_w_tail < 0));
+    if (tails_not_ok)
         return status::unimplemented;
 
     return status::success;

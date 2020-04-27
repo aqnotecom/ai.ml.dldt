@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Intel Corporation
+// Copyright (C) 2018-2020 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -13,6 +13,7 @@
 #include <mkldnn_extension_utils.h>
 #include <ie_memcpy.h>
 #include "details/caseless.hpp"
+#include "graph_transformer.h"
 
 using namespace mkldnn;
 using namespace MKLDNNPlugin;
@@ -79,8 +80,8 @@ public:
 
             // make chunk view
             auto chunk_desc =  full_blob->GetDescriptor();
-            chunk_desc.data.dims[axis] = 1;
-            chunk_desc.data.layout_desc.blocking.padding_dims[axis] = 1;  // TODO: asamption that plain tensor
+            chunk_desc.data.dims[axis] = abs_stride;
+            chunk_desc.data.layout_desc.blocking.padding_dims[axis] = abs_stride;  // TODO: asamption that plain tensor
 
             mem_holder.push_back(full_blob->GetPrimitive());
             auto full_mem_handler = full_blob->GetPrimitive().get_data_handle();
@@ -89,8 +90,7 @@ public:
 
             auto elem_size = MKLDNNExtensionUtils::sizeOfDataType(mkldnn::memory::data_type(chunk_desc.data.data_type));
 
-            // TODO: only stride 1
-            chunk_stride_in_byte = chunk_desc.data.layout_desc.blocking.strides[0][axis] * elem_size;
+            chunk_stride_in_byte = chunk_desc.data.layout_desc.blocking.strides[0][axis] * elem_size * abs_stride;
             chunk_offset_in_byte = sign_of_stride < 0 ? (iter_count - 1) * chunk_stride_in_byte : 0;
             chunk_stride_in_byte *= sign_of_stride;
 
@@ -252,3 +252,4 @@ void MKLDNNTensorIteratorNode::execute(mkldnn::stream strm) {
 bool MKLDNNTensorIteratorNode::created() const {
     return getType() == TensorIterator;
 }
+REG_MKLDNN_PRIM_FOR(MKLDNNTensorIteratorNode, TensorIterator);

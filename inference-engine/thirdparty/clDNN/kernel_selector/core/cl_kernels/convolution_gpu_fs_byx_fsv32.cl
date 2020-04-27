@@ -15,6 +15,7 @@
 #include "include/common.cl"
 #include "include/data_types.cl"
 #include "include/unit_type.cl"
+#include "include/include_all.cl"
 
 #define unroll_for __attribute__((opencl_unroll_hint)) for
 
@@ -27,6 +28,8 @@
 // In some cases input padding may be bigger than needed, those variables describe the offset into padding.
 #define INPUT0_PADDING_OFFSET_SIZE_X (INPUT0_PAD_BEFORE_SIZE_X - PADDING_SIZE_X)
 #define INPUT0_PADDING_OFFSET_SIZE_Y (INPUT0_PAD_BEFORE_SIZE_Y - PADDING_SIZE_Y)
+
+#define ALIGNED_IFM_NUM (((FILTER_IFM_NUM + FSV - 1) / FSV) * FSV)
 
 // ======================================================================================
 // Required JIT definitions:
@@ -49,33 +52,36 @@ KERNEL(convolution_gpu_fs_byx_fsv32)(
 #if BIAS_TERM
     __global UNIT_TYPE* biases,
 #endif
+#if HAS_FUSED_OPS_DECLS
+    FUSED_OPS_DECLS,
+#endif
     int split_idx)
 {
-    uint oc = get_global_id(0) * OUTPUT_BLOCK_WIDTH;
+    uint oc = (uint)get_global_id(0) * OUTPUT_BLOCK_WIDTH;
     uint or = get_global_id(1);
     uint fs_b_id = get_group_id(2);
     uint sglid = get_sub_group_local_id();
 
     uint fs = fs_b_id / INPUT0_BATCH_NUM;
     uint b = fs_b_id - fs * INPUT0_BATCH_NUM;
-    
+
     UNIT_TYPE in[INPUT_BLOCK_WIDTH * FSV_PER_THREAD];
     UNIT_TYPE w[FSV_PER_THREAD];
     UNIT_TYPE out[OUTPUT_BLOCK_WIDTH * FSV_PER_THREAD];
-    
+
     for (uint out_i = 0; out_i < OUTPUT_BLOCK_WIDTH * FSV_PER_THREAD; ++out_i)
     {
         out[out_i] = UNIT_VAL_ZERO;
     }
-    
+
     uint input_offset = 0;
     input_offset += (oc * STRIDE_SIZE_X + INPUT0_PADDING_OFFSET_SIZE_X) * FSV;
     input_offset += (or * STRIDE_SIZE_Y + INPUT0_PADDING_OFFSET_SIZE_Y) * INPUT0_SIZE_X_WITH_PADDING * FSV;
     input_offset += b * INPUT0_SIZE_X_WITH_PADDING * INPUT0_SIZE_Y_WITH_PADDING * FSV;
-    
+
     uint weight_offset = 0;
-    weight_offset += fs * FILTER_SIZE_X * FILTER_SIZE_Y * FILTER_IFM_NUM * FSV;
-    
+    weight_offset += fs * FILTER_SIZE_X * FILTER_SIZE_Y * ALIGNED_IFM_NUM * FSV;
+
     for (uint ifi_32 = 0; ifi_32 < (FILTER_IFM_NUM + FSV - 1) / FSV; ++ifi_32)
     {
 
@@ -191,7 +197,7 @@ KERNEL(convolution_gpu_fs_byx_fsv32)(
     output_offset += (or + OUTPUT_PAD_BEFORE_SIZE_Y) * FSV * OUTPUT_SIZE_X_WITH_PADDING;
     output_offset += b  * FSV * OUTPUT_SIZE_X_WITH_PADDING * OUTPUT_SIZE_Y_WITH_PADDING;
     output_offset += (pad_before_fs + fs) * FSV * OUTPUT_SIZE_X_WITH_PADDING * OUTPUT_SIZE_Y_WITH_PADDING * OUTPUT_BATCH_NUM;
-    
+
     const bool full_f = OUTPUT_FEATURE_NUM % FSV == 0 || fs * FSV + FSV <= OUTPUT_FEATURE_NUM;
     const bool full_x = OUTPUT_SIZE_X % OUTPUT_BLOCK_WIDTH == 0 || oc + OUTPUT_BLOCK_WIDTH <= OUTPUT_SIZE_X;
 
@@ -202,6 +208,12 @@ KERNEL(convolution_gpu_fs_byx_fsv32)(
         {
             UNIT_TYPE2 tmp_write = (UNIT_TYPE2)(out[out_x * FSV_PER_THREAD + 0],
                                                 out[out_x * FSV_PER_THREAD + 1]);
+#if HAS_FUSED_OPS
+            unroll_for (uint out_f = 0; out_f < 2; ++out_f)
+            {
+                { FUSED_OPS_VEC_ELEM; tmp_write[out_f] = FUSED_OPS_RESULT_VEC_ELEM; }
+            }
+#endif
             UNIT_BLOCK_WRITE2(output, output_offset, tmp_write);
             output_offset += FSV;
         }
@@ -214,7 +226,11 @@ KERNEL(convolution_gpu_fs_byx_fsv32)(
             {
                 if (oc + out_x < OUTPUT_SIZE_X && fs * FSV + sglid + out_f * SUB_GROUP_SIZE < OUTPUT_FEATURE_NUM)
                 {
-                    output[output_offset + sglid] = out[out_x * FSV_PER_THREAD + out_f];
+                    const uint out_idx = out_x * FSV_PER_THREAD + out_f;
+#if HAS_FUSED_OPS
+                    { FUSED_OPS_SCALAR; out[out_idx] = FUSED_OPS_RESULT_SCALAR; }
+#endif
+                    output[output_offset + sglid] = out[out_idx];
                 }
                 output_offset += SUB_GROUP_SIZE;
             }

@@ -1,9 +1,9 @@
-// Copyright (C) 2018-2019 Intel Corporation
+// Copyright (C) 2018-2020 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
 #include "myriad_mvnc_wraper.h"
-#include <inference_engine.hpp>
+#include "details/ie_exception.hpp"
 
 using namespace vpu::MyriadPlugin;
 

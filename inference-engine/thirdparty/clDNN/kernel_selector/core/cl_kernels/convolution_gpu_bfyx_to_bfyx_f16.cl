@@ -109,7 +109,7 @@ KERNEL(convolution_bfyx_to_bfyx_f16)(
     for (int ic = 0; ic < 3; ic++)
     {
         __attribute__((opencl_unroll_hint(INPUT_BLOCK_SIZE)))
-        for (uint i = 0; i < INPUT_BLOCK_SIZE; i++)
+        for (int i = 0; i < INPUT_BLOCK_SIZE; i++)
         {
             const uint in_elem = i * SUB_GROUP_SIZE + lid;
             const uint xb = in_elem % INPUT_LINE_SIZE;
@@ -127,10 +127,10 @@ KERNEL(convolution_bfyx_to_bfyx_f16)(
 
 
     __attribute__((opencl_unroll_hint(FILTER_SIZE_Y)))
-    for (uint kh = 0; kh < FILTER_SIZE_Y; kh++)
+    for (int kh = 0; kh < FILTER_SIZE_Y; kh++)
     {
         __attribute__((opencl_unroll_hint(FILTER_SIZE_X)))
-        for (uint kw = 0; kw < FILTER_SIZE_X; kw++)
+        for (int kw = 0; kw < FILTER_SIZE_X; kw++)
         {
             MAKE_VECTOR_TYPE(UNIT_TYPE, 2) wei = UNIT_BLOCK_READ2(weights, filter_offset +
                                                                            kh * filter_y_pitch +
@@ -164,7 +164,7 @@ KERNEL(convolution_bfyx_to_bfyx_f16)(
         for (int i = 0; i < OUTPUT_X_BLOCK_SIZE; i++) {
 #if HAS_FUSED_OPS
             FUSED_OPS_SCALAR;
-            dst[i] = FINAL_NAME_SCALAR;
+            dst[i] = FUSED_OPS_RESULT_SCALAR;
 #endif
             if ((f_block*FEATURE_SLICE_SIZE + lid < OUTPUT_FEATURE_NUM) && (x + i) < OUTPUT_SIZE_X)
                 output[output_offset + i * output_x_pitch + lid] = dst[i];
@@ -176,7 +176,7 @@ KERNEL(convolution_bfyx_to_bfyx_f16)(
         if (x + OUTPUT_X_BLOCK_SIZE <= OUTPUT_SIZE_X) {
 #if HAS_FUSED_OPS
             FUSED_OPS_VEC;
-            dst = FINAL_NAME_VEC;
+            dst = FUSED_OPS_RESULT_VEC;
 #endif
             // TODO Generalize for other block sizes
 #if OUTPUT_X_BLOCK_SIZE == 8
@@ -195,7 +195,7 @@ KERNEL(convolution_bfyx_to_bfyx_f16)(
             for (int i = 0; i < x_tail; i++) {
 #if HAS_FUSED_OPS
             FUSED_OPS_SCALAR;
-            dst[i] = FINAL_NAME_SCALAR;
+            dst[i] = FUSED_OPS_RESULT_SCALAR;
 #endif
                 UNIT_BLOCK_WRITE(output, output_offset + i * output_x_pitch, dst[i]);
             }
@@ -203,4 +203,4 @@ KERNEL(convolution_bfyx_to_bfyx_f16)(
     }
 }
 
-#undef FEATURE_SLICE_SIZE 16
+#undef FEATURE_SLICE_SIZE

@@ -15,8 +15,8 @@
 *******************************************************************************/
 
 #include "c_types_map.hpp"
-#include "mkldnn_thread.hpp"
 #include "type_helpers.hpp"
+#include "mkldnn_thread.hpp"
 #include "utils.hpp"
 
 #include "jit_generator.hpp"
@@ -31,29 +31,6 @@ using namespace mkldnn::impl::status;
 using namespace mkldnn::impl::memory_format;
 using namespace mkldnn::impl::memory_tracking::names;
 using namespace mkldnn::impl::utils;
-
-namespace {
-template <typename T, typename U>
-void balance2D(U nthr, U ithr, T ny, T &ny_start, T &ny_end,
-    T nx, T &nx_start, T &nx_end, T nx_divider)
-{
-    const T grp_size = utils::div_up(nthr, nx_divider);
-    const T grp_count = utils::div_up(nthr, grp_size);
-
-    T grp = ithr / grp_size;
-    T grp_ithr = ithr % grp_size;
-    T grp_nthr = grp_size;
-    T first_grps = nthr % grp_count;
-    if (first_grps > 0 && grp >= first_grps) {
-        ithr -= first_grps * grp_size;
-        grp_nthr--;
-        grp = ithr / grp_nthr + first_grps;
-        grp_ithr = ithr % grp_nthr;
-    }
-    balance211(nx, grp_count, grp, nx_start, nx_end);
-    balance211(ny, grp_nthr, grp_ithr, ny_start, ny_end);
-}
-}
 
 /* convolution forward */
 template <data_type_t src_type, data_type_t dst_type>
@@ -117,8 +94,8 @@ void jit_avx512_core_x8s8s32x_1x1_convolution_fwd_t<src_type, dst_type>
     int offset = jcp.ngroups * (jcp.oc / jcp.oc_block) * (jcp.ic / jcp.ic_block)
         * jcp.oc_block * jcp.ic_block;
     wei_data_t *w = const_cast<wei_data_t *>(weights);
-    int32_t* compensation = (jcp.signed_input)
-        ? reinterpret_cast<int32_t *>(w + offset) : 0;
+    int32_t* compensation = (jcp.signed_input) ? reinterpret_cast<int32_t *>(w + offset) :
+                            (jcp.with_input_zp) ? pd()->attr()->output_compensations_.shifts_ : 0;
 
     auto step = [](int default_step, int remaining, int tail_step) {
         assert(default_step <= tail_step);
@@ -197,7 +174,7 @@ void jit_avx512_core_x8s8s32x_1x1_convolution_fwd_t<src_type, dst_type>
             ? weights_d.blk_off(g, ocb, icb)
             : weights_d.blk_off(ocb, icb)];
         p.bias_data = &bias[_ocb * jcp.oc_block * bia_dt_size];
-        p.compensation = (jcp.signed_input)
+        p.compensation = (jcp.signed_input || jcp.with_input_zp)
             ? &compensation[_ocb * jcp.oc_block] : 0;
         p.scales = (jcp.signed_input && jcp.ver != ver_vnni)
             ? &local_scales[jcp.is_oc_scale * _ocb * jcp.oc_block]

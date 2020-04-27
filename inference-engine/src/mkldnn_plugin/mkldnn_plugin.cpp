@@ -1,15 +1,28 @@
-// Copyright (C) 2018-2019 Intel Corporation
+// Copyright (C) 2018-2020 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
 #include "ie_metric_helpers.hpp"
 #include "mkldnn_plugin.h"
 #include "mkldnn_extension_mngr.h"
+#include "mkldnn_layers_dispatcher.hpp"
 #include <cpp_interfaces/base/ie_plugin_base.hpp>
+#include <threading/ie_executor_manager.hpp>
 #include <memory>
 #include <ie_plugin_config.hpp>
 #include <vector>
 #include <tuple>
+#include <ie_system_conf.h>
+#include <generic_ie.hpp>
+
+#include "cnn_network_ngraph_impl.hpp"
+#include "convert_function_to_cnn_network.hpp"
+#include <transformations/convert_opset1_to_legacy/convert_opset1_to_legacy.hpp>
+#include <transformations/convert_opset2_to_opset1/convert_opset2_to_opset1.hpp>
+#include <ngraph/opsets/opset1.hpp>
+#include <ngraph/opsets/opset2.hpp>
+#include <ngraph/op/fused/gelu.hpp>
+#include <ngraph_ops/fully_connected.hpp>
 
 #if !defined(__arm__) && !defined(_M_ARM) && !defined(__aarch64__) && !defined(_M_ARM64)
 #if defined(_WIN32) || defined(WIN32)
@@ -17,38 +30,35 @@
 #include <windows.h>
 #else
 #include <cpuid.h>
+
 #endif
 #endif
 
 using namespace MKLDNNPlugin;
 using namespace InferenceEngine;
 
-std::vector<std::shared_ptr<MKLDNNWeightsSharing>> create_shared_weights_per_socket() {
-    std::vector<std::shared_ptr<MKLDNNWeightsSharing>> _weightsSharing;
-    const int sockets = MKLDNNPlugin::cpu::getNumberOfCPUSockets();
-    for (int s = 0; s < sockets; s++)
-        _weightsSharing.push_back(std::make_shared<MKLDNNWeightsSharing>());
+NumaNodesWeights create_shared_weights_per_socket() {
+    NumaNodesWeights _weightsSharing;
+    std::vector<int> sockets = InferenceEngine::getAvailableNUMANodes();
+    for (auto s : sockets)
+        _weightsSharing[s] = std::make_shared<MKLDNNWeightsSharing>();
     return _weightsSharing;
 }
 
-std::vector<std::shared_ptr<MKLDNNWeightsSharing>> Engine::weightsSharing = create_shared_weights_per_socket();
+NumaNodesWeights Engine::weightsSharing = create_shared_weights_per_socket();
 const SimpleDataHash MKLDNNWeightsSharing::simpleCRC;
 
 Engine::Engine() {
     _pluginName = "CPU";
+    addDefaultExtensions(extensionManager);
+}
+
+Engine::~Engine() {
+    ExecutorManager::getInstance()->clear("CPUStreamsExecutor");
 }
 
 InferenceEngine::ExecutableNetworkInternal::Ptr
-Engine::LoadExeNetworkImpl(const ICore * /*core*/, InferenceEngine::ICNNNetwork &network, const std::map<std::string, std::string> &config) {
-    IE_SUPPRESS_DEPRECATED_START
-    auto specifiedDevice = network.getTargetDevice();
-    auto supportedDevice = InferenceEngine::TargetDevice::eCPU;
-    if (specifiedDevice != InferenceEngine::TargetDevice::eDefault && specifiedDevice != supportedDevice) {
-        THROW_IE_EXCEPTION << "The plugin doesn't support target device: " << getDeviceName(specifiedDevice) << ".\n" <<
-                           "Supported target device: " << getDeviceName(supportedDevice);
-    }
-    IE_SUPPRESS_DEPRECATED_END
-
+Engine::LoadExeNetworkImpl(const ICore * /*core*/, const InferenceEngine::ICNNNetwork &network, const std::map<std::string, std::string> &config) {
     // verification of supported input
     InferenceEngine::InputsDataMap _networkInputs;
     network.getInputsInfo(_networkInputs);
@@ -75,27 +85,43 @@ Engine::LoadExeNetworkImpl(const ICore * /*core*/, InferenceEngine::ICNNNetwork 
         conf.batchLimit = static_cast<int>(network.getBatchSize());
     }
 
-    return std::make_shared<MKLDNNExecNetwork>(network, conf, extensionManager);
+    std::shared_ptr<ICNNNetwork> clonedNetwork(nullptr);
+
+    if (auto networkNGraph = dynamic_cast<const CNNNetworkNGraphImpl*>(&network)) {
+        auto nGraphNetwork = networkNGraph->cloneNGraphImpl();
+        if (!nGraphNetwork->getFunction()) {
+            clonedNetwork = nGraphNetwork->getCNNNetwork();
+        } else {
+            const auto transformations_callback = [](const std::shared_ptr<const ::ngraph::Node> &node) -> bool {
+                return std::dynamic_pointer_cast<const ::ngraph::opset2::Gelu>(node) ||
+                       std::dynamic_pointer_cast<const ::ngraph::opset2::BatchToSpace>(node) ||
+                       std::dynamic_pointer_cast<const ::ngraph::opset2::SpaceToBatch>(node);
+            };
+            // Disable shape inference (WA for generic operations)
+            ::ngraph::op::GenericIE::DisableReshape noReshape(nGraphNetwork->getFunction());
+
+            // Note: instead of running all Conversion Transformations you can make up your own transformation pipeline
+            ngraph::pass::ConvertOpSet2ToOpSet1(transformations_callback).run_on_function(nGraphNetwork->getFunction());
+            ngraph::pass::ConvertOpSet1ToLegacy(transformations_callback).run_on_function(nGraphNetwork->getFunction());
+            clonedNetwork = InferenceEngine::details::convertFunctionToICNNNetwork(nGraphNetwork->getFunction(), *nGraphNetwork.get());
+        }
+    } else {
+        clonedNetwork = cloneNet(network);
+    }
+
+    auto implNetwork = std::dynamic_pointer_cast<details::CNNNetworkImpl>(clonedNetwork);
+    if (implNetwork) {
+        // valid for CNNNetworkImpl only, while there's no API in ICNNNetwork to change network
+        ConstTransformer transformator(implNetwork.get());
+        transformator.fullTrim();
+    }
+
+    return std::make_shared<MKLDNNExecNetwork>(*clonedNetwork, conf, extensionManager);
 }
 
 void Engine::SetConfig(const std::map<std::string, std::string> &config) {
     // accumulate config parameters on engine level
     engConfig.readProperties(config);
-
-    // Pass config to already loaded network
-    // TODO: Clarify the behavior of SetConfig method. Should it pass data to already loaded networks?
-    if (_loadedNetwork) {
-        // ugly casting. can we avoid it?
-        auto exe_network =
-                dynamic_cast<ExecutableNetworkBase<ExecutableNetworkInternal>*>(_loadedNetwork.get());
-        if (exe_network == nullptr)
-            THROW_IE_EXCEPTION << "Cannot get executable network!";
-        auto exe_network_impl = dynamic_cast<MKLDNNExecNetwork*>(exe_network->getImpl().get());
-        if (exe_network_impl == nullptr)
-            THROW_IE_EXCEPTION << "Cannot get implementation of executable network!";
-
-        exe_network_impl->setProperty(config);
-    }
 }
 
 Parameter Engine::GetConfig(const std::string& name, const std::map<std::string, Parameter>& /*options*/) const {
@@ -185,26 +211,21 @@ void Engine::AddExtension(InferenceEngine::IExtensionPtr extension) {
     extensionManager->AddExtension(extension);
 }
 
-void Engine::QueryNetwork(const ICNNNetwork& network, QueryNetworkResult& res) const {
-    QueryNetwork(network, {}, res);
-}
-
 void Engine::QueryNetwork(const ICNNNetwork& network, const std::map<std::string, std::string>& config, QueryNetworkResult& res) const {
-    details::CNNNetworkIterator i(const_cast<ICNNNetwork *>(&network));
+    details::CNNNetworkIterator i(&network);
     while (i != details::CNNNetworkIterator()) {
         try {
             mkldnn::engine eng(mkldnn::engine(mkldnn::engine::kind::cpu, 0));
             // if we can create and have not thrown exception, then layer is supported
             std::unique_ptr <MKLDNNNode>(MKLDNNNode::CreateNode(*i, eng, extensionManager));
             res.supportedLayersMap.insert({ (*i)->name, GetName() });
-            IE_SUPPRESS_DEPRECATED_START
-            res.supportedLayers.insert((*i)->name);
-            IE_SUPPRESS_DEPRECATED_END
         } catch (InferenceEngine::details::InferenceEngineException&) {
         }
         i++;
     }
 }
+
+IE_SUPPRESS_DEPRECATED_START
 
 INFERENCE_PLUGIN_API(StatusCode) CreatePluginEngine(IInferencePlugin*& plugin, ResponseDesc *resp) noexcept {
     try {
@@ -218,3 +239,5 @@ INFERENCE_PLUGIN_API(StatusCode) CreatePluginEngine(IInferencePlugin*& plugin, R
         return DescriptionBuffer(GENERAL_ERROR, resp) << ex.what();
     }
 }
+
+IE_SUPPRESS_DEPRECATED_END

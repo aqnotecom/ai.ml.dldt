@@ -1,40 +1,39 @@
-// Copyright (C) 2018-2019 Intel Corporation
+// Copyright (C) 2018-2020 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
 #pragma once
 
+#include <vpu/utils/error.hpp>
+#include <vpu/utils/io.hpp>
+#include <vpu/utils/dot_io.hpp>
+
 #include <utility>
 #include <type_traits>
-
-#include <details/ie_exception.hpp>
 
 namespace vpu {
 
 template <typename T>
 class Optional final {
 public:
-    inline Optional() noexcept : _mem{}, _hasValue(false) {
-    }
+    Optional() = default;
 
-    inline ~Optional() {
+    ~Optional() {
         reset();
     }
 
-    inline Optional(const Optional& other) : _mem{}, _hasValue(false) {
+    Optional(const Optional& other) {
         if (other._hasValue) {
             constructValue(other.getValueRef());
-            _hasValue = true;
         }
     }
-    inline Optional& operator=(const Optional& other) {
+    Optional& operator=(const Optional& other) {
         if (this != &other) {
             if (other._hasValue) {
                 if (_hasValue) {
                     getValueRef() = other.getValueRef();
                 } else {
                     constructValue(other.getValueRef());
-                    _hasValue = true;
                 }
             } else {
                 reset();
@@ -43,20 +42,18 @@ public:
         return *this;
     }
 
-    inline Optional(Optional&& other) : _mem{}, _hasValue(false) {
+    Optional(Optional&& other) {
         if (other._hasValue) {
             constructValue(other.getValueMoveRef());
-            _hasValue = true;
         }
     }
-    inline Optional& operator=(Optional&& other) {
+    Optional& operator=(Optional&& other) {
         if (this != &other) {
             if (other._hasValue) {
                 if (_hasValue) {
                     getValueRef() = other.getValueMoveRef();
                 } else {
                     constructValue(other.getValueMoveRef());
-                    _hasValue = true;
                 }
             } else {
                 reset();
@@ -66,21 +63,19 @@ public:
     }
 
     template <typename U>
-    inline Optional(const Optional<U>& other) : _mem{}, _hasValue(false) {
+    Optional(const Optional<U>& other) {
         if (other._hasValue) {
             constructValue(other.getValueRef());
-            _hasValue = true;
         }
     }
     template <typename U>
-    inline Optional& operator=(const Optional<U>& other) {
+    Optional& operator=(const Optional<U>& other) {
         if (this != &other) {
             if (other._hasValue) {
                 if (_hasValue) {
                     getValueRef() = other.getValueRef();
                 } else {
                     constructValue(other.getValueRef());
-                    _hasValue = true;
                 }
             } else {
                 reset();
@@ -90,21 +85,19 @@ public:
     }
 
     template <typename U>
-    inline Optional(Optional<U>&& other) : _mem{}, _hasValue(false) {
+    Optional(Optional<U>&& other) {
         if (other._hasValue) {
             constructValue(other.getValueMoveRef());
-            _hasValue = true;
         }
     }
     template <typename U>
-    inline Optional& operator=(Optional<U>&& other) {
+    Optional& operator=(Optional<U>&& other) {
         if (this != &other) {
             if (other._hasValue) {
                 if (_hasValue) {
                     getValueRef() = other.getValueMoveRef();
                 } else {
                     constructValue(other.getValueMoveRef());
-                    _hasValue = true;
                 }
             } else {
                 reset();
@@ -113,81 +106,122 @@ public:
         return *this;
     }
 
-    template <
-        typename U,
-        typename _Check = typename std::enable_if<!std::is_reference<U>::value, void>::type>
-    inline Optional(U&& value) : _mem{}, _hasValue(true) {  // NOLINT
-        constructValue(std::forward<U>(value));
+    Optional(const T& value) {  // NOLINT
+        constructValue(value);
     }
-
-    template <typename U>
-    inline Optional& operator=(U&& value) {
+    Optional& operator=(const T& value) {
         if (_hasValue) {
-            getValueRef() = std::forward<U>(value);
+            getValueRef() = value;
         } else {
-            constructValue(std::forward<U>(value));
-            _hasValue = true;
+            constructValue(value);
         }
-        _hasValue = true;
         return *this;
     }
 
-    inline void reset() noexcept {
+    Optional(T&& value) {  // NOLINT
+        constructValue(std::move(value));
+    }
+    Optional& operator=(T&& value) {
+        if (_hasValue) {
+            getValueRef() = std::move(value);
+        } else {
+            constructValue(std::move(value));
+        }
+        return *this;
+    }
+
+    template <typename... Args, typename = typename std::enable_if<std::is_constructible<T, Args...>::value>::type>
+    Optional(Args&&... args) {  // NOLINT
+        constructValue(std::forward<Args>(args)...);
+    }
+
+    void reset() noexcept {
         if (_hasValue) {
             destroyValue();
-            _hasValue = false;
         }
     }
 
-    inline bool hasValue() const noexcept {
+    bool hasValue() const noexcept {
         return _hasValue;
     }
 
-    inline const T& get() const {
-        IE_ASSERT(_hasValue);
+    const T& get() const {
+        VPU_INTERNAL_CHECK(_hasValue, "Optional object is not set");
         return getValueRef();
     }
 
-    template <typename U>
-    inline T getOrDefault(U&& def) const {
+    T getOrDefault() const {
         if (_hasValue) {
             return getValueRef();
         } else {
-            return std::forward<U>(def);
+            return T();
+        }
+    }
+    T getOrDefault(const T& def) const {
+        if (_hasValue) {
+            return getValueRef();
+        } else {
+            return def;
+        }
+    }
+    T getOrDefault(T&& def) const {
+        if (_hasValue) {
+            return getValueRef();
+        } else {
+            return std::move(def);
         }
     }
 
+    T&& move() {
+        VPU_INTERNAL_CHECK(_hasValue, "Optional object is not set");
+        return getValueMoveRef();
+    }
+
 private:
-    using Memory = typename std::aligned_storage<sizeof(T), alignof(T)>::type[1];
+    using Memory = typename std::aligned_storage<sizeof(T), alignof(T)>::type;
 
-    inline T& getValueRef() {
-        return *reinterpret_cast<T*>(_mem);
+private:
+    T& getValueRef() {
+        return *reinterpret_cast<T*>(&_mem);
     }
-    inline const T& getValueRef() const {
-        return *reinterpret_cast<const T*>(_mem);
+    const T& getValueRef() const {
+        return *reinterpret_cast<const T*>(&_mem);
     }
 
-    inline T&& getValueMoveRef() {
+    T&& getValueMoveRef() {
         return std::move(getValueRef());
     }
 
-    template <typename U>
-    inline void constructValue(U&& value) {
-        new (_mem) T(std::forward<U>(value));
+    template <typename... Args, typename = typename std::enable_if<std::is_constructible<T, Args...>::value>::type>
+    void constructValue(Args&&... args) {
+        new (&_mem) T(std::forward<Args>(args)...);
+        _hasValue = true;
     }
 
-    inline void destroyValue() {
-        reinterpret_cast<T*>(_mem)->~T();
+    void destroyValue() {
+        reinterpret_cast<T*>(&_mem)->~T();
+        _hasValue = false;
     }
 
 private:
-    // TODO: actually, it would be better to initialize _mem here instead of doing it
-    // in each contructor but it causes a segfault in gcc 4.8
     Memory _mem;
     bool _hasValue = false;
 
     template <typename U>
     friend class Optional;
 };
+
+template <typename T>
+void printTo(std::ostream& os, const Optional<T>& opt) {
+    if (opt.hasValue()) {
+        printTo(os, opt.get());
+    }
+}
+template <typename T>
+void printTo(DotLabel& lbl, const Optional<T>& opt) {
+    if (opt.hasValue()) {
+        printTo(lbl, opt.get());
+    }
+}
 
 }  // namespace vpu

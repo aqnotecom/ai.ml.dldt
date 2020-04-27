@@ -1,39 +1,45 @@
-// Copyright (C) 2018-2019 Intel Corporation
+// Copyright (C) 2018-2020 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
 /**
  * @brief A header file for the CNNNetworkIterator class
+ * 
  * @file ie_cnn_network_iterator.hpp
  */
 #pragma once
-#include <utility>
-#include <unordered_set>
-#include <list>
 #include <iterator>
+#include <list>
+#include <unordered_set>
+#include <utility>
 
-#include "ie_locked_memory.hpp"
+#include "ie_api.h"
 #include "ie_icnn_network.hpp"
+#include "ie_locked_memory.hpp"
 
 namespace InferenceEngine {
 namespace details {
 
 /**
+ * @deprecated Migrate to IR v10 and work with ngraph::Function directly. The method will be removed in 2020.3
  * @brief This class enables range loops for CNNNetwork objects
  */
-class CNNNetworkIterator {
+class INFERENCE_ENGINE_INTERNAL("Migrate to IR v10 and work with ngraph::Function directly. The method will be removed in 2020.3")
+CNNNetworkIterator {
+    IE_SUPPRESS_DEPRECATED_START
+
     std::unordered_set<CNNLayer*> visited;
     std::list<CNNLayerPtr> nextLayersTovisit;
     InferenceEngine::CNNLayerPtr currentLayer;
-    ICNNNetwork * network = nullptr;
+    ICNNNetwork* network = nullptr;
 
- public:
+public:
     /**
      * iterator trait definitions
      */
     typedef std::forward_iterator_tag iterator_category;
     typedef CNNLayerPtr value_type;
-    typedef int         difference_type;
+    typedef int difference_type;
     typedef CNNLayerPtr pointer;
     typedef CNNLayerPtr reference;
 
@@ -43,13 +49,14 @@ class CNNNetworkIterator {
     CNNNetworkIterator() = default;
     /**
      * @brief Constructor. Creates an iterator for specified CNNNetwork instance.
-     * @param network Network to iterate. Make sure the network object is not destroyed before iterator goes out of scope.
+     * @param network Network to iterate. Make sure the network object is not destroyed before iterator goes out of
+     * scope.
      */
-    explicit CNNNetworkIterator(ICNNNetwork * network) {
+    explicit CNNNetworkIterator(const ICNNNetwork* network) {
         InputsDataMap inputs;
         network->getInputsInfo(inputs);
         if (!inputs.empty()) {
-            auto & nextLayers = inputs.begin()->second->getInputData()->getInputTo();
+            auto& nextLayers = inputs.begin()->second->getInputData()->getInputTo();
             if (!nextLayers.empty()) {
                 currentLayer = nextLayers.begin()->second;
                 nextLayersTovisit.push_back(currentLayer);
@@ -59,10 +66,10 @@ class CNNNetworkIterator {
     }
 
     /**
-     * @brief Performs pre-increment 
+     * @brief Performs pre-increment
      * @return This CNNNetworkIterator instance
      */
-    CNNNetworkIterator &operator++() {
+    CNNNetworkIterator& operator++() {
         currentLayer = next();
         return *this;
     }
@@ -80,14 +87,14 @@ class CNNNetworkIterator {
      * @param that Iterator to compare with
      * @return true if the given iterator is not equal to this one, false - otherwise
      */
-    bool operator!=(const CNNNetworkIterator &that) const {
+    bool operator!=(const CNNNetworkIterator& that) const {
         return !operator==(that);
     }
 
     /**
      * @brief Gets const layer pointer referenced by this iterator
      */
-    const CNNLayerPtr &operator*() const {
+    const CNNLayerPtr& operator*() const {
         if (nullptr == currentLayer) {
             THROW_IE_EXCEPTION << "iterator out of bound";
         }
@@ -97,7 +104,7 @@ class CNNNetworkIterator {
     /**
      * @brief Gets a layer pointer referenced by this iterator
      */
-    CNNLayerPtr &operator*() {
+    CNNLayerPtr& operator*() {
         if (nullptr == currentLayer) {
             THROW_IE_EXCEPTION << "iterator out of bound";
         }
@@ -108,11 +115,11 @@ class CNNNetworkIterator {
      * @param that Iterator to compare with
      * @return true if the given iterator is equal to this one, false - otherwise
      */
-    bool operator==(const CNNNetworkIterator &that) const {
+    bool operator==(const CNNNetworkIterator& that) const {
         return network == that.network && currentLayer == that.currentLayer;
     }
 
- private:
+private:
     /**
      * @brief implementation based on BFS
      */
@@ -125,8 +132,8 @@ class CNNNetworkIterator {
         nextLayersTovisit.pop_front();
 
         // visit child that not visited
-        for (auto && output : nextLayer->outData) {
-            for (auto && child : output->getInputTo()) {
+        for (auto&& output : nextLayer->outData) {
+            for (auto&& child : output->getInputTo()) {
                 if (visited.find(child.second.get()) == visited.end()) {
                     nextLayersTovisit.push_back(child.second);
                     visited.insert(child.second.get());
@@ -135,7 +142,7 @@ class CNNNetworkIterator {
         }
 
         // visit parents
-        for (auto && parent  : nextLayer->insData) {
+        for (auto&& parent : nextLayer->insData) {
             auto parentLayer = parent.lock()->getCreatorLayer().lock();
             if (parentLayer && visited.find(parentLayer.get()) == visited.end()) {
                 nextLayersTovisit.push_back(parentLayer);
@@ -145,6 +152,8 @@ class CNNNetworkIterator {
 
         return nextLayersTovisit.empty() ? nullptr : nextLayersTovisit.front();
     }
+
+    IE_SUPPRESS_DEPRECATED_END
 };
 }  // namespace details
 }  // namespace InferenceEngine

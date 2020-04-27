@@ -49,6 +49,10 @@ struct jit_avx2_1x1_conv_kernel_f32: public jit_generator {
         for (auto inj : depthwise_injectors)
             delete inj;
         depthwise_injectors.clear();
+
+        for (auto inj : quantization_injectors)
+            delete inj;
+        quantization_injectors.clear();
     }
 
     static bool post_ops_ok(jit_1x1_conv_conf_t &jcp,
@@ -102,12 +106,16 @@ private:
     ymm_t vreg_bcast = ymm_t(15);
     ymm_t vtmp = ymm_t(14);
 
+    ymm_t ymm_d_weights = Xbyak::Ymm(14);
+    ymm_t ymm_d_bias = Xbyak::Ymm(15);
+
     void generate_bcast_loop(int load_loop_blk);
     void generate_reduce_loop(int load_loop_blk, int ur);
     void generate_diff_bias_loop(int load_loop_blk);
 
     nstl::vector<jit_uni_eltwise_injector_f32<avx2>*> eltwise_injectors;
     nstl::vector<jit_uni_depthwise_injector_f32<avx2>*> depthwise_injectors;
+    nstl::vector<jit_uni_quantization_injector_f32<avx2>*> quantization_injectors;
 
     void generate();
 };

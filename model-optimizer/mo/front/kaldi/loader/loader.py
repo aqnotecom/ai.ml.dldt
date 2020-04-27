@@ -1,5 +1,5 @@
 """
- Copyright (c) 2018-2019 Intel Corporation
+ Copyright (C) 2018-2020 Intel Corporation
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -28,28 +28,6 @@ from mo.front.kaldi.loader.utils import find_next_tag, read_placeholder, find_ne
 from mo.graph.graph import Node, Graph
 from mo.utils.error import Error
 from mo.utils.utils import refer_to_faq_msg
-
-
-def read_counts_file(file_path):
-    with open(file_path, 'r') as f:
-        file_content = f.readlines()
-    if len(file_content) > 1:
-        raise Error('Expect counts file to be one-line file. ' +
-                    refer_to_faq_msg(90))
-
-    counts_line = file_content[0].strip().replace('[', '').replace(']', '')
-    try:
-        counts = np.fromstring(counts_line, dtype=float, sep=' ')
-    except TypeError:
-        raise Error('Expect counts file to contain list of floats.' +
-                    refer_to_faq_msg(90))
-    cutoff = 1.00000001e-10
-    cutoff_idxs = np.where(counts < cutoff)
-    counts[cutoff_idxs] = cutoff
-    scale = 1.0 / np.sum(counts)
-    counts = np.log(counts * scale)  # pylint: disable=assignment-from-no-return
-    counts[cutoff_idxs] += np.finfo(np.float32).max / 2
-    return counts
 
 
 def load_parallel_component(file_descr, graph: Graph, prev_layer_id):
@@ -81,7 +59,8 @@ def load_parallel_component(file_descr, graph: Graph, prev_layer_id):
     for i in range(nnet_count):
         read_token_value(file_descr, b'<NestedNnet>')
         collect_until_token(file_descr, b'<Nnet>')
-        g = load_kalid_nnet1_model(file_descr, 'Nested_net_{}'.format(i))
+        g = Graph()
+        load_kalid_nnet1_model(g, file_descr, 'Nested_net_{}'.format(i))
         input_nodes = [n for n in graph.nodes(data=True) if n[1]['op'] == 'Parameter']
         shape = input_nodes[0][1]['shape']
         if i != nnet_count - 1:
@@ -115,7 +94,7 @@ def load_parallel_component(file_descr, graph: Graph, prev_layer_id):
     return concat_id
 
 
-def load_kaldi_model(nnet_path):
+def load_kaldi_model(graph, nnet_path):
     """
     Structure of the file is the following:
     magic-number(16896)<Nnet> <Next Layer Name> weights etc.
@@ -150,12 +129,10 @@ def load_kaldi_model(nnet_path):
                     refer_to_faq_msg(89))
     read_placeholder(file_desc, 1)
 
-    return load_function(file_desc, nnet_name)
+    return load_function(graph, file_desc, nnet_name)
 
 
-def load_kalid_nnet1_model(file_descr, name):
-    graph = Graph(name=name)
-
+def load_kalid_nnet1_model(graph, file_descr, name):
     prev_layer_id = 'Parameter'
     graph.add_node(prev_layer_id, name=prev_layer_id, kind='op', op='Parameter', parameters=None)
 
@@ -191,11 +168,9 @@ def load_kalid_nnet1_model(file_descr, name):
         graph.create_edge(prev_node, Node(graph, layer_id), 0, 0)
         prev_layer_id = layer_id
         log.debug('{} (type is {}) was loaded'.format(prev_layer_id, component_type))
-    return graph
 
 
-def load_kalid_nnet2_model(file_descr, nnet_name):
-    graph = Graph(name=nnet_name)
+def load_kalid_nnet2_model(graph, file_descr, nnet_name):
     input_name = 'Input'
     graph.add_node(input_name, name=input_name, kind='op', op='Parameter', parameters=None, shape=None)
 
@@ -214,11 +189,9 @@ def load_kalid_nnet2_model(file_descr, nnet_name):
         graph.create_edge(prev_node, Node(graph, layer_id), 0, 0)
         prev_layer_id = layer_id
         log.debug('{} and {} were connected'.format(prev_layer_id, layer_id))
-    return graph
 
 
-def load_kaldi_nnet3_model(file_descr, nnet_name):
-    graph = Graph(name=nnet_name)
+def load_kaldi_nnet3_model(graph, file_descr, nnet_name):
     file_descr.read(1)
     component_layer_map = load_topology_map(file_descr, graph)
     # add information for shape calculation for MemoryOffset
@@ -231,19 +204,15 @@ def load_kaldi_nnet3_model(file_descr, nnet_name):
                 o_n['parameters']['element_size'] = node['shape'][1]
 
     load_components(file_descr, graph, component_layer_map)
-    return graph
 
 
 def load_components(file_descr, graph, component_layer_map=None):
     num_components = collect_until_token_and_read(file_descr, b'<NumComponents>')
     log.debug('Network contains {} components'.format(num_components))
-    is_nnet3 = False
-    prev_pos = file_descr.tell()
-    try:
+    is_nnet3 = False if component_layer_map is None else True
+
+    if not is_nnet3:
         collect_until_token(file_descr, b'<Components>')
-    except Error:
-        is_nnet3 = True
-        file_descr.seek(prev_pos)
 
     all_components = list()
     name = ""
@@ -263,7 +232,7 @@ def load_components(file_descr, graph, component_layer_map=None):
         file_descr.seek(start_index)
         dim = 0
         try:
-            collect_until_token(file_descr, b'<Dim>')
+            collect_until_token(file_descr, b'<Dim>', size_search_zone=end_index-start_index)
             cur_index = file_descr.tell()
             if start_index < cur_index < end_index:
                 dim = read_binary_integer32_token(file_descr)

@@ -240,6 +240,7 @@ void jit_sse42_conv_fwd_kernel_f32::width_blk_step(int ur_w,
 
     int eltwise_inj_idx = 0;
     int depthwise_inj_idx = 0;
+    int quantization_inj_idx = 0;
     const auto &p = attr_.post_ops_;
 
     int end_idx = jcp.with_dw_conv ? p.find(primitive_kind::convolution) : p.len_;
@@ -264,6 +265,26 @@ void jit_sse42_conv_fwd_kernel_f32::width_blk_step(int ur_w,
             }
 
             depthwise_inj_idx++;
+        } else if (post_op.is_quantization()) {
+            quantization_injectors[quantization_inj_idx]->init_crop_ptrs(reg_oc_off);
+            for (int ii = 0; ii < oc_blocks; ii++) {
+                int s_idx = Xmm(ur_w * ii + 1).getIdx();
+                quantization_injectors[quantization_inj_idx]->compute_crop(s_idx, s_idx + ur_w, ii * jcp.oc_block * sizeof(float));
+            }
+
+            quantization_injectors[quantization_inj_idx]->init_input_scale_shift_ptrs(reg_oc_off);
+            for (int ii = 0; ii < oc_blocks; ii++) {
+                int s_idx = Xmm(ur_w * ii + 1).getIdx();
+                quantization_injectors[quantization_inj_idx]->compute_input_scale_shift(s_idx, s_idx + ur_w, ii * jcp.oc_block * sizeof(float), true);
+            }
+
+            quantization_injectors[quantization_inj_idx]->init_output_scale_shift_ptrs(reg_oc_off);
+            for (int ii = 0; ii < oc_blocks; ii++) {
+                int s_idx = Xmm(ur_w * ii + 1).getIdx();
+                quantization_injectors[quantization_inj_idx]->compute_output_scale_shift(s_idx, s_idx + ur_w, ii * jcp.oc_block * sizeof(float));
+            }
+
+            quantization_inj_idx++;
         }
     }
 
@@ -371,6 +392,12 @@ void jit_sse42_conv_fwd_kernel_f32::generate()
                     this,
                     post_op.depthwise.alg
             ));
+        } else if (post_op.is_quantization()) {
+            quantization_injectors.push_back(new jit_uni_quantization_injector_f32<sse42>(
+                    this,
+                    post_op,
+                    xmm_d_weights, xmm_d_bias, reg_d_weights, reg_d_bias
+            ));
         }
     }
 
@@ -422,7 +449,8 @@ bool jit_sse42_conv_fwd_kernel_f32::post_ops_ok(
 
         int end_idx = with_dw_conv ? dw_conv_idx : p.len_;
         for (int i = 0; i < end_idx; i++) {
-            ok = ok && utils::one_of(p.entry_[i].kind, primitive_kind::sum, primitive_kind::eltwise, primitive_kind::depthwise);
+            ok = ok && utils::one_of(p.entry_[i].kind, primitive_kind::sum, primitive_kind::eltwise, primitive_kind::depthwise,
+                                     primitive_kind::quantization);
         }
         return ok;
     };
@@ -477,6 +505,9 @@ status_t jit_sse42_conv_fwd_kernel_f32::init_conf(jit_conv_conf_t &jcp,
 
     jcp.src_fmt = src_d.format();
     jcp.with_bias = cd.bias_desc.format != memory_format::undef;
+
+    if (ndims > 4)
+        return status::unimplemented;
 
     jcp.src_dt = cd.src_desc.data_type;
     jcp.bia_dt = jcp.with_bias ? cd.bias_desc.data_type : data_type::undef;

@@ -1,5 +1,5 @@
 /*
-// Copyright (c) 2016 Intel Corporation
+// Copyright (c) 2016-2020 Intel Corporation
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -31,8 +31,7 @@ ParamsKey ConvolutionKernel_byx8_f4__fs_bs_yx_bsv4_fsv32::GetSupportedKey() cons
     k.EnableDilation();
     k.EnableBiasPerFeature();
     k.EnableBatching();
-    k.EnableInt8Quantization();
-    k.EnableOutputCalibration();
+    k.EnableQuantization(QuantizationType::SYMMETRIC);
     k.DisableTuning();
     return k;
 }
@@ -41,12 +40,6 @@ bool ConvolutionKernel_byx8_f4__fs_bs_yx_bsv4_fsv32::Validate(const Params& p, c
     if (!Parent::Validate(p, o)) {
         return false;
     }
-
-    const convolution_params& params = static_cast<const convolution_params&>(p);
-
-    // this kernel is designed for quantization use case
-    if (!params.int8_quantization)
-        return false;
 
     return true;
 }
@@ -62,7 +55,7 @@ ConvolutionKernelBase::DispatchData ConvolutionKernel_byx8_f4__fs_bs_yx_bsv4_fsv
     int) const {
     DispatchData runInfo = ConvolutionKernelBase::SetDefault(arg);
 
-    runInfo.effiency = FORCE_PRIORITY_1;
+    runInfo.efficiency = FORCE_PRIORITY_1;
 
     runInfo.gws0 = (arg.output.Batch().v * arg.output.Feature().v) / (4 * 2);
     runInfo.gws1 = arg.output.X().v / 8;

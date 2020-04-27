@@ -28,6 +28,8 @@ command_queues_builder::command_queues_builder(const cl::Context& context,
     : _context(context),
       _device(device),
       _platform_id(platform_id),
+      _profiling(false),
+      _out_of_order(false),
       _priority_mode(priority_mode_types::disabled),
       _throttle_mode(throttle_mode_types::disabled) {}
 
@@ -41,7 +43,7 @@ void command_queues_builder::build() {
     auto properties = get_properties();
 
     if (_priority_mode == priority_mode_types::disabled && _throttle_mode == throttle_mode_types::disabled) {
-        _queue = cl::CommandQueue(_context, _device, properties);
+        _queue = queue_type(_context, _device, properties);
         return;
     }
 
@@ -82,7 +84,7 @@ void command_queues_builder::build() {
                                                 properties,
                                                 0};
 
-        _queue = clCreateCommandQueueWithProperties(_context.get(), _device.get(), properties_low, &error_code);
+        _queue = queue_type(clCreateCommandQueueWithProperties(_context.get(), _device.get(), properties_low, &error_code));
     } else if (_priority_mode != priority_mode_types::disabled) {
         cl_queue_properties properties_low[] = {CL_QUEUE_PRIORITY_KHR,
                                                 cl_queue_priority_value,
@@ -90,7 +92,7 @@ void command_queues_builder::build() {
                                                 properties,
                                                 0};
 
-        _queue = clCreateCommandQueueWithProperties(_context.get(), _device.get(), properties_low, &error_code);
+        _queue = queue_type(clCreateCommandQueueWithProperties(_context.get(), _device.get(), properties_low, &error_code));
     } else if (_throttle_mode != throttle_mode_types::disabled) {
         cl_queue_properties properties_low[] = {CL_QUEUE_THROTTLE_KHR,
                                                 cl_queue_throttle_value,
@@ -98,7 +100,7 @@ void command_queues_builder::build() {
                                                 properties,
                                                 0};
 
-        _queue = clCreateCommandQueueWithProperties(_context.get(), _device.get(), properties_low, &error_code);
+        _queue = queue_type(clCreateCommandQueueWithProperties(_context.get(), _device.get(), properties_low, &error_code));
     }
 
     if (error_code != CL_SUCCESS) {

@@ -49,15 +49,38 @@ status_t scales_t::set(int count, int mask, const float *scales) {
     return status::success;
 }
 
+template <typename T>
+status_t shifts_t<T>::set(int count, int mask, const T *shifts) {
+    cleanup();
+
+    count_ = count;
+    mask_ = mask;
+
+    if (count_ == 1) {
+        shifts_ = shifts_buf_;
+        utils::array_set(shifts_, shifts[0], shifts_buf_size);
+    } else {
+        shifts_ = (T *)impl::malloc(count_ * sizeof(*shifts_), 64);
+        if (shifts_ == nullptr)
+            return status::out_of_memory;
+
+        for (int c = 0; c < count_; ++c)
+            shifts_[c] = shifts[c];
+    }
+
+    return status::success;
+}
+
 }
 }
 
-status_t post_ops_t::append_sum(float scale) {
+status_t post_ops_t::append_sum(float scale, mkldnn::impl::data_type_t data_type) {
     if (len_ == capacity)
         return out_of_memory;
 
     entry_[len_].kind = primitive_kind::sum;
     entry_[len_].sum.scale = scale;
+    entry_[len_].sum.data_type = data_type;
 
     len_++;
 
@@ -70,7 +93,7 @@ status_t post_ops_t::append_eltwise(float scale, alg_kind_t alg, float alpha,
     bool known_alg = one_of(alg, eltwise_relu, eltwise_tanh, eltwise_elu,
             eltwise_square, eltwise_abs, eltwise_sqrt, eltwise_linear,
             eltwise_bounded_relu, eltwise_soft_relu, eltwise_logistic,
-            eltwise_clamp, eltwise_exp, eltwise_not);
+            eltwise_exp, eltwise_gelu, eltwise_clamp, eltwise_not, eltwise_swish);
     if (!known_alg)
         return invalid_arguments;
 
@@ -131,7 +154,7 @@ status_t post_ops_t::append_dw_conv(int in_h, int in_w, int ker_h, int ker_w, in
     return success;
 }
 
-status_t post_ops_t::append_binarization(alg_kind_t alg, const float* weights_data, const float* output_mask_data) {
+status_t post_ops_t::append_binarization(alg_kind_t alg, const float* thresholds_data, const float* output_mask_data) {
     using namespace mkldnn::impl::alg_kind;
     bool known_alg = one_of(alg, binarization_depthwise);
     if (!known_alg)
@@ -142,8 +165,44 @@ status_t post_ops_t::append_binarization(alg_kind_t alg, const float* weights_da
 
     entry_[len_].kind = primitive_kind::binarization;
     entry_[len_].binarization.alg = alg;
-    entry_[len_].binarization.weights_data = weights_data;
+    entry_[len_].binarization.thresholds_data = thresholds_data;
     entry_[len_].binarization.output_mask_data = output_mask_data;
+
+    len_++;
+
+    return success;
+}
+
+status_t post_ops_t::append_quantization(alg_kind_t alg,
+                                         int crop_low_count, const float* crop_low, int crop_high_count, const float* crop_high,
+                                         int input_scale_count, const float* input_scale, int input_shift_count, const float* input_shift,
+                                         int output_scale_count, const float* output_scale, int output_shift_count, const float* output_shift) {
+    using namespace mkldnn::impl::alg_kind;
+    bool known_alg = one_of(alg, quantization_quantize_dequantize, quantization_quantize);
+    if (!known_alg)
+        return invalid_arguments;
+
+    if (len_ == capacity)
+        return out_of_memory;
+
+    bool ok = crop_low_count > 0 && crop_high_count > 0 && input_scale_count > 0 && input_shift_count > 0 && output_scale_count > 0 && output_shift_count > 0;
+    if (!ok)
+        return invalid_arguments;
+
+    entry_[len_].kind = primitive_kind::quantization;
+    entry_[len_].quantization.alg = alg;
+    entry_[len_].quantization.crop_low_data = new shifts_t<float>();
+    entry_[len_].quantization.crop_low_data->set(crop_low_count, 1 << 1, crop_low);
+    entry_[len_].quantization.crop_high_data = new shifts_t<float>();
+    entry_[len_].quantization.crop_high_data->set(crop_high_count, 1 << 1, crop_high);
+    entry_[len_].quantization.input_scale_data = new scales_t();
+    entry_[len_].quantization.input_scale_data->set(input_scale_count, 1 << 1, input_scale);
+    entry_[len_].quantization.input_shift_data = new shifts_t<float>();
+    entry_[len_].quantization.input_shift_data->set(input_shift_count, 1 << 1, input_shift);
+    entry_[len_].quantization.output_scale_data = new scales_t();
+    entry_[len_].quantization.output_scale_data->set(output_scale_count, 1 << 1, output_scale);
+    entry_[len_].quantization.output_shift_data = new shifts_t<float>();
+    entry_[len_].quantization.output_shift_data->set(output_shift_count, 1 << 1, output_shift);
 
     len_++;
 
@@ -231,6 +290,69 @@ status_t mkldnn_primitive_attr_set_output_scales(primitive_attr_t *attr,
     return attr->output_scales_.set(count, mask, scales);
 }
 
+status_t mkldnn_primitive_attr_get_output_compensations(const primitive_attr_t *attr,
+        int *count, int *mask, const int32_t **compensations) {
+    if (any_null(attr, count, mask, compensations))
+        return invalid_arguments;
+
+    *count = attr->output_compensations_.count_;
+    *mask = attr->output_compensations_.mask_;
+    *compensations = attr->output_compensations_.shifts_;
+
+    return success;
+}
+
+status_t mkldnn_primitive_attr_set_output_compensations(primitive_attr_t *attr,
+        int count, int mask, const int32_t *compensations) {
+    bool ok = !any_null(attr, compensations) && count > 0 && mask >= 0;
+    if (!ok)
+        return invalid_arguments;
+
+    return attr->output_compensations_.set(count, mask, compensations);
+}
+
+status_t mkldnn_primitive_attr_get_input_zero_points(const primitive_attr_t *attr,
+        int *count, int *mask, const uint8_t **zero_points) {
+    if (any_null(attr, count, mask, zero_points))
+        return invalid_arguments;
+
+    *count = attr->input_zero_points_.count_;
+    *mask = attr->input_zero_points_.mask_;
+    *zero_points = attr->input_zero_points_.shifts_;
+
+    return success;
+}
+
+status_t mkldnn_primitive_attr_set_input_zero_points(primitive_attr_t *attr,
+        int count, int mask, const uint8_t *zero_points) {
+    bool ok = !any_null(attr, zero_points) && count > 0 && mask >= 0;
+    if (!ok)
+        return invalid_arguments;
+
+    return attr->input_zero_points_.set(count, mask, zero_points);
+}
+
+status_t mkldnn_primitive_attr_get_weights_zero_points(const primitive_attr_t *attr,
+        int *count, int *mask, const float **zero_points) {
+    if (any_null(attr, count, mask, zero_points))
+        return invalid_arguments;
+
+    *count = attr->weights_zero_points_.count_;
+    *mask = attr->weights_zero_points_.mask_;
+    *zero_points = attr->weights_zero_points_.shifts_;
+
+    return success;
+}
+
+status_t mkldnn_primitive_attr_set_weights_zero_points(primitive_attr_t *attr,
+        int count, int mask, const float *zero_points) {
+    bool ok = !any_null(attr, zero_points) && count > 0 && mask >= 0;
+    if (!ok)
+        return invalid_arguments;
+
+    return attr->weights_zero_points_.set(count, mask, zero_points);
+}
+
 status_t mkldnn_primitive_attr_get_post_ops(const primitive_attr_t *attr,
         const post_ops_t **post_ops) {
     if (any_null(attr, post_ops))
@@ -278,11 +400,11 @@ primitive_kind_t mkldnn_post_ops_get_kind(const post_ops_t *post_ops,
     return post_ops->entry_[index].kind;
 }
 
-status_t mkldnn_post_ops_append_sum(post_ops_t *post_ops, float scale) {
+status_t mkldnn_post_ops_append_sum(post_ops_t *post_ops, float scale, mkldnn::impl::data_type_t data_type) {
     if (post_ops == nullptr)
         return invalid_arguments;
 
-    return post_ops->append_sum(scale);
+    return post_ops->append_sum(scale, data_type);
 }
 
 namespace {
@@ -298,7 +420,7 @@ bool simple_get_params_check(const post_ops_t *post_ops, int index,
 }
 
 status_t mkldnn_post_ops_get_params_sum(const post_ops_t *post_ops, int index,
-        float *scale) {
+        float *scale, mkldnn_data_type_t *data_type) {
     bool ok = true
         && simple_get_params_check(post_ops, index, primitive_kind::sum)
         && !any_null(scale);
@@ -306,6 +428,7 @@ status_t mkldnn_post_ops_get_params_sum(const post_ops_t *post_ops, int index,
         return invalid_arguments;
 
     *scale = post_ops->entry_[index].sum.scale;
+    *data_type = post_ops->entry_[index].sum.data_type;
     return success;
 }
 
@@ -420,17 +543,61 @@ status_t mkldnn_post_ops_append_binarization(post_ops_t *post_ops, alg_kind_t ki
 }
 
 status_t mkldnn_post_ops_get_params_binarization(const post_ops_t *post_ops, int index, alg_kind_t *alg,
-        const float** weights_data, const float** output_mask_data) {
+        const float** thresholds_data, const float** output_mask_data) {
     bool ok = true
         && simple_get_params_check(post_ops, index, primitive_kind::binarization)
-        && !any_null(alg, weights_data, output_mask_data);
+        && !any_null(alg, thresholds_data, output_mask_data);
     if (!ok)
         return invalid_arguments;
 
     const auto &e = post_ops->entry_[index].binarization;
     *alg = e.alg;
-    *weights_data = e.weights_data;
+    *thresholds_data = e.thresholds_data;
     *output_mask_data = e.output_mask_data;
 
     return success;
 }
+
+status_t mkldnn_post_ops_append_quantization(post_ops_t *post_ops, alg_kind_t kind,
+                                             int crop_low_count, const float* crop_low, int crop_high_count, const float* crop_high,
+                                             int input_scale_count, const float* input_scale, int input_shift_count, const float* input_shift,
+                                             int output_scale_count, const float* output_scale, int output_shift_count, const float* output_shift) {
+    if (post_ops == nullptr)
+        return invalid_arguments;
+
+    return post_ops->append_quantization(kind, crop_low_count, crop_low, crop_high_count, crop_high,
+            input_scale_count, input_scale, input_shift_count, input_shift, output_scale_count, output_scale, output_shift_count, output_shift);
+}
+
+status_t mkldnn_post_ops_get_params_quantization(const post_ops_t *post_ops, int index, alg_kind_t* alg,
+                                                 int* crop_low_count, const float** crop_low, int* crop_high_count, const float** crop_high,
+                                                 int* input_scale_count, const float** input_scale, int* input_shift_count, const float** input_shift,
+                                                 int* output_scale_count, const float** output_scale, int* output_shift_count, const float** output_shift) {
+    bool ok = true
+              && simple_get_params_check(post_ops, index, primitive_kind::quantization)
+              && !any_null(alg, crop_low_count, crop_low, crop_high_count, crop_high,
+                      input_scale_count, input_scale, input_shift_count, input_shift, output_scale_count, output_scale, output_shift_count, output_shift);
+    if (!ok)
+        return invalid_arguments;
+
+    const auto &e = post_ops->entry_[index].quantization;
+    *alg = e.alg;
+    *crop_low_count = e.crop_low_data->count_;
+    *crop_high_count = e.crop_high_data->count_;
+    *input_scale_count = e.input_scale_data->count_;
+    *input_shift_count = e.input_shift_data->count_;
+    *output_scale_count = e.output_scale_data->count_;
+    *output_shift_count = e.output_shift_data->count_;
+    *crop_low = e.crop_low_data->shifts_;
+    *crop_high = e.crop_high_data->shifts_;
+    *input_scale = e.input_scale_data->scales_;
+    *input_shift = e.input_shift_data->shifts_;
+    *output_scale = e.output_scale_data->scales_;
+    *output_shift = e.output_shift_data->shifts_;
+
+    return success;
+}
+
+template struct mkldnn::impl::shifts_t<uint8_t>;
+template struct mkldnn::impl::shifts_t<int32_t>;
+template struct mkldnn::impl::shifts_t<float>;

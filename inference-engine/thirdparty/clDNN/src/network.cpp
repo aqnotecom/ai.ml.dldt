@@ -22,6 +22,7 @@
 #include "api/data.hpp"
 #include "api/mutable_data.hpp"
 #include "api/input_layout.hpp"
+#include <src/include/to_string_utils.h>
 
 #include "error_handler.h"
 #include "primitive_inst.h"
@@ -29,6 +30,7 @@
 #include "mutable_data_inst.h"
 #include "condition_inst.h"
 #include "kernel_selector_helper.h"
+#include "gpu/memory_gpu.h"
 #include <algorithm>
 
 #include "gpu/ocl_toolkit.h"
@@ -69,6 +71,10 @@ void network::set_input_data(const primitive_id& id, const memory& mem) const {
     _impl->set_input_data(id, *mem.get());
 }
 
+void network::set_output_memory(const primitive_id& id, const memory& mem) const {
+    _impl->set_output_memory(id, *mem.get());
+}
+
 void network::set_learning_rate(const float lr) {
     _impl->set_learning_rate(lr);
 }
@@ -77,8 +83,8 @@ float network::get_learning_rate() {
     return _impl->get_learning_rate();
 }
 
-uint16_t network::get_stream_id() {
-    return _impl->get_stream_id();
+uint32_t network::get_id() {
+    return _impl->get_id();
 }
 
 std::string network::get_primitive_info(const primitive_id& id) const {
@@ -103,6 +109,10 @@ std::vector<primitive_id> network::get_all_primitive_ids() const {
 
 std::vector<primitive_id> network::get_all_primitive_org_ids() const {
     return _impl->get_all_primitive_org_ids();
+}
+
+std::vector<primitive_id> network::get_input_ids() const {
+    return _impl->get_input_ids();
 }
 
 std::vector<primitive_id> network::get_output_ids() const {
@@ -189,6 +199,10 @@ static float convert_half_to_float(half_t val, bool flush_denorm_to_zero = false
 #endif
 }
 
+float convert_element(uint32_t u) { return static_cast<float>(u); }
+
+float convert_element(int32_t i) { return static_cast<float>(i); }
+
 float convert_element(float f) { return f; }
 
 float convert_element(half_t h) { return convert_half_to_float(h); }
@@ -197,26 +211,22 @@ template <class T>
 static void dump(memory_impl& mem, std::ofstream& file_stream) {
     auto&& size = mem.get_layout().size;
 
-    file_stream << "shape: ";
-    file_stream << size.batch[0] << " ";
-    file_stream << size.feature[0] << " ";
-    file_stream << size.spatial[3] << " ";
-    file_stream << size.spatial[2] << " ";
-    file_stream << size.spatial[1] << " ";
-    file_stream << size.spatial[0] << " ";
-    file_stream << "(" << size.batch[0] * size.feature[0] * size.spatial[3] * size.spatial[2] * size.spatial[1] * size.spatial[0] << ")" << std::endl;
+    file_stream << "shape: " << size.to_string() << " ";
+    file_stream << "(count: " << size.count() << ", original format: " << cldnn::fmt_to_str(mem.get_layout().format) << ")" << std::endl;
 
     auto mem_ptr = static_cast<T*>(mem.lock());
 
-    for (cldnn::tensor::value_type b = 0; b < size.batch[0]; ++b) {
-        for (cldnn::tensor::value_type f = 0; f < size.feature[0]; ++f) {
-            for (cldnn::tensor::value_type w = 0; w < size.spatial[3]; ++w) {
-                for (cldnn::tensor::value_type z = 0; z < size.spatial[2]; ++z) {
-                    for (cldnn::tensor::value_type y = 0; y < size.spatial[1]; ++y) {
-                        for (cldnn::tensor::value_type x = 0; x < size.spatial[0]; ++x) {
-                            cldnn::tensor t(cldnn::batch(b), cldnn::feature(f), cldnn::spatial(x, y, z, w));
-                            size_t input_it = mem.get_layout().get_linear_offset(t);
-                            file_stream << std::fixed << std::setprecision(6) << convert_element(mem_ptr[input_it]) << std::endl;
+    for (cldnn::tensor::value_type g = 0; g < size.group[0]; ++g) {
+        for (cldnn::tensor::value_type b = 0; b < size.batch[0]; ++b) {
+            for (cldnn::tensor::value_type f = 0; f < size.feature[0]; ++f) {
+                for (cldnn::tensor::value_type w = 0; w < size.spatial[3]; ++w) {
+                    for (cldnn::tensor::value_type z = 0; z < size.spatial[2]; ++z) {
+                        for (cldnn::tensor::value_type y = 0; y < size.spatial[1]; ++y) {
+                            for (cldnn::tensor::value_type x = 0; x < size.spatial[0]; ++x) {
+                                cldnn::tensor t(cldnn::group(g), cldnn::batch(b), cldnn::feature(f), cldnn::spatial(x, y, z, w));
+                                size_t input_it = mem.get_layout().get_linear_offset(t);
+                                file_stream << std::fixed << std::setprecision(6) << convert_element(mem_ptr[input_it]) << std::endl;
+                            }
                         }
                     }
                 }
@@ -273,6 +283,10 @@ static void log_memory_to_file(memory_impl& mem, std::string layerName) {
         dump<uint32_t>(mem, file_stream);
     else if (mem.get_layout().data_type == cldnn::data_types::i32)
         dump<int32_t>(mem, file_stream);
+    else if (mem.get_layout().data_type == cldnn::data_types::i8)
+        dump<int8_t>(mem, file_stream);
+    else if (mem.get_layout().data_type == cldnn::data_types::u8)
+        dump<uint8_t>(mem, file_stream);
 }
 #endif
 /*
@@ -285,6 +299,9 @@ network_impl::network_impl(const program_impl& program, uint16_t stream_id, bool
     if (!_internal) {
         net_id = ++id_gen;
     }
+    if (net_id) {
+        get_engine().get_context()->add_network(net_id);
+    }
 
     allocate_primitives();
     check_names();
@@ -292,6 +309,15 @@ network_impl::network_impl(const program_impl& program, uint16_t stream_id, bool
     build_exec_order();
     validate_primitives();
     _program->dump_memory_pool();
+}
+
+network_impl::~network_impl() {
+    auto toolkit = get_engine().get_context();
+    get_engine().get_memory_pool().clear_pool_for_network(net_id);
+    toolkit->release_pending_memory(net_id);
+    if (net_id) {
+        toolkit->remove_network(net_id);
+    }
 }
 
 network_impl::network_impl(engine_impl& engine,
@@ -349,6 +375,25 @@ void network_impl::set_input_data(const primitive_id& id, memory_impl& data) {
     input->set_data(data);
 }
 
+void network_impl::set_output_memory(const primitive_id& id, memory_impl& mem) {
+    std::shared_ptr<primitive_inst> primitive_inst;
+
+    primitive_inst = find_primitive(id);
+
+    if (primitive_inst == nullptr)
+        throw std::runtime_error("topology doesn't contain primitive: " + id);
+
+    auto iter = std::find(_outputs.begin(), _outputs.end(), primitive_inst);
+    if (iter == _outputs.end())
+        throw std::runtime_error("primitive: " + id + " is not a network output");
+
+    auto output = std::static_pointer_cast<input_layout_inst>(primitive_inst);
+
+    // Wait for previous execution completion
+    reset_execution(true);
+    output->set_output_memory(mem);
+}
+
 void cldnn::network_impl::check_names() {
     for (auto const& prim : _primitives) {
         if (find_in_internal_networks(prim.first) != nullptr)
@@ -385,6 +430,16 @@ std::shared_ptr<primitive_inst> cldnn::network_impl::find_in_internal_networks(c
 void network_impl::set_learning_rate(const float lr) { _learning_rate = lr; }
 
 float network_impl::get_learning_rate() { return _learning_rate; }
+
+bool network_impl::is_primary_stream() {
+    auto _nstreams = get_engine().configuration().n_streams;
+    return _nstreams == 1 || (_nstreams > 1 && _stream_id > 0);
+}
+
+bool network_impl::is_secondary_stream() {
+    auto _nstreams = get_engine().configuration().n_streams;
+    return _nstreams > 1 && _stream_id > 0;
+}
 
 std::string network_impl::get_primitive_info(const primitive_id& id) const {
     const auto& node = _program->get_node(id);
@@ -437,6 +492,26 @@ void network_impl::execute(const std::vector<refcounted_obj_ptr<event_impl>>& ev
     // Wait for previous execution completion
     reset_execution(false);
 
+    // collect all shared media surfaces and enqueue acquire/relese
+    auto check_and_add_to_return_vec = [](std::shared_ptr<primitive_inst> prim, std::vector<cl_mem>& return_vec) {
+        const auto& mem = prim->output_memory().get_internal_params();
+        if (mem.mem_type == shared_mem_type::shared_mem_vasurface ||
+            mem.mem_type == shared_mem_type::shared_mem_dxbuffer) {
+            return_vec.push_back(static_cast<cl_mem>(mem.mem));
+        }
+    };
+    std::vector<cl_mem> surfaces;
+
+    for (auto& inst : _inputs) {
+        check_and_add_to_return_vec(inst, surfaces);
+    }
+
+    for (auto& inst : _outputs) {
+        check_and_add_to_return_vec(inst, surfaces);
+    }
+    cl_int err;
+    cl::SharedSurfLock lock(get_engine().get_context()->queue(get_id()).get(), surfaces, &err);
+
     for (auto& inst : _exec_order) {
 #ifdef DEBUG_DUMP_PATH
         auto& node = _program->get_node(inst->id());
@@ -466,7 +541,7 @@ void network_impl::execute(const std::vector<refcounted_obj_ptr<event_impl>>& ev
             log_memory_to_file(get_primitive(inst->id())->output_memory(), layer_name + "_dst_0");
         }
 
-        get_engine().flush_network(_stream_id);
+        get_engine().flush_network(get_id());
 #endif
     }
 
@@ -497,19 +572,26 @@ void network_impl::execute(const std::vector<refcounted_obj_ptr<event_impl>>& ev
 
     for (auto& dout : _data_outputs) {  // data primitives are not executed so if they are marked as output we need to add
                                         // them valid events manually
-        _events[dout->id()] = get_engine().create_user_event(get_stream_id(), true);
+        _events[dout->id()] = get_engine().create_user_event(get_id(), true);
     }
 
     for (auto& prim : _primitives) {
         prim.second->reset_output_change();
     }
 
-    get_engine().get_context()->reset_events(get_stream_id());
+    get_engine().get_context()->reset_events(get_id());
 
     // Using output of previouse network as input to another one may cause hazard (in OOOQ mode) if user would not
     // provide proper event to execution. Flushing pipeline should prevent this kind of issues.
     // In scenarios with a big number of very small networks it can provide performance drop.
-    get_engine().flush_network(get_stream_id());
+    get_engine().flush_network(get_id());
+}
+
+std::vector<primitive_id> network_impl::get_input_ids() const {
+    std::vector<primitive_id> ret;
+    ret.reserve(_inputs.size());
+    for (auto const& input : _inputs) ret.push_back(input->id());
+    return ret;
 }
 
 std::vector<primitive_id> network_impl::get_output_ids() const {
@@ -591,7 +673,7 @@ void network_impl::execute_primitive(const std::shared_ptr<primitive_inst>& prim
     if (!get_engine().get_context()->enabled_single_kernel() || get_engine().get_context()->single_kernel_name() == id)
         ev = primitive->execute(events);
     else
-        ev = get_engine().create_user_event(get_stream_id(), true);
+        ev = get_engine().create_user_event(get_id(), true);
     _events.insert({id, ev});
 }
 
@@ -601,9 +683,10 @@ void network_impl::allocate_mutable_data_for_streams(std::vector<std::shared_ptr
         auto it = mutable_data_nodes.begin();
         mutable_data_node& node = (*it)->as<mutable_data>();
         auto mem = node.get_attached_memory_ptr();
-        if (mem->get_stream_id() != get_stream_id()) {
+
+        if (is_secondary_stream()) {
             // Alloc new buffer for this stream and copy data to have valid initial state
-            memory_impl::ptr result = get_engine().allocate_memory(mem->get_layout(), get_stream_id());
+            memory_impl::ptr result = get_engine().allocate_memory(mem->get_layout(), get_id(), false);
             {
                 mem_lock<char> src(mem);
                 mem_lock<char> dst(result);
@@ -637,6 +720,28 @@ void network_impl::allocate_primitive_instance(program_node const& node) {
         _outputs.push_back(inst);
         if (node.is_type<data>())
             _data_outputs.push_back(inst);
+    }
+    if (node.is_constant())
+        transfer_memory_to_device(inst, node);
+}
+
+void network_impl::transfer_memory_to_device(std::shared_ptr<primitive_inst> instance, program_node const& node) {
+    auto& inst_mem = instance->output_memory();
+    auto alloc_type = inst_mem.get_allocation_type();
+
+    // Do not transfer memory if a user requires lockable memory.
+    // If memory is used in both gpu and cpu implementations, primitive itself is responsible for correct allocation type
+    if (node.need_lockable_memory())
+        return;
+
+    if (alloc_type == allocation_type::usm_host || alloc_type == allocation_type::usm_shared) {
+        // Allocate and transfer memory
+        auto device_mem = inst_mem.get_engine()->allocate_memory(
+            inst_mem.get_layout(),
+            allocation_type::usm_device,
+            inst_mem.get_net_id());
+        dynamic_cast<gpu::gpu_usm&>(*device_mem).copy_from_other(dynamic_cast<gpu::gpu_usm&>(inst_mem));
+        instance->set_output_memory(*device_mem);
     }
 }
 }  // namespace cldnn

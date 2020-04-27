@@ -1,5 +1,5 @@
 /*
-// Copyright (c) 2016 Intel Corporation
+// Copyright (c) 2016-2020 Intel Corporation
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -31,8 +31,7 @@ ParamsKey ConvolutionKernel_byxf_fs_bs_yx_bsv4_fsv32::GetSupportedKey() const {
     k.EnableBiasPerFeature();
     k.EnableNonBiasTerm();
     k.EnableBatching();
-    k.EnableInt8Quantization();
-    k.EnableOutputCalibration();
+    k.EnableQuantization(QuantizationType::SYMMETRIC);
     k.DisableTuning();
     return k;
 }
@@ -42,7 +41,7 @@ ConvolutionKernelBase::DispatchData ConvolutionKernel_byxf_fs_bs_yx_bsv4_fsv32::
     int) const {
     DispatchData runInfo = ConvolutionKernelBase::SetDefault(arg);
 
-    runInfo.effiency = FORCE_PRIORITY_1;
+    runInfo.efficiency = FORCE_PRIORITY_1;
 
     runInfo.gws0 = (arg.output.Batch().v * arg.output.Feature().v) / 4;
     runInfo.gws1 = arg.output.X().v / 8;

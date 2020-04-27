@@ -15,19 +15,17 @@
 #include "include/fetch.cl"
 #include "include/data_types.cl"
 
-
-#if FP16_UNIT_USED
-    #define UNIT_CVT_FUNC(val) convert_half(val)
-#else
-    #define UNIT_CVT_FUNC(val) (val)
+KERNEL (mvn_gpu_ref_within_channels)(
+    const __global INPUT0_TYPE* input,
+    __global OUTPUT_TYPE* restrict output
+#if HAS_FUSED_OPS_DECLS
+    , FUSED_OPS_DECLS
 #endif
-
-
-KERNEL (mvn_gpu_ref_within_channels)(const __global UNIT_TYPE* input, __global UNIT_TYPE* output)
+    )
 {
     const uint b = get_global_id(0);
     const uint f = get_global_id(1);
-    float mean = 0.f;
+    float mean = 0;
 
     const uint input_first = INPUT0_OFFSET + b * INPUT0_BATCH_PITCH + f * INPUT0_FEATURE_PITCH;
 
@@ -39,12 +37,16 @@ KERNEL (mvn_gpu_ref_within_channels)(const __global UNIT_TYPE* input, __global U
         {
             for (uint x = 0; x < INPUT0_SIZE_X; x++)
             {
-#if INPUT0_LAYOUT_BFZYX_F16
-                input_idx = GET_DATA_BFZYX_F16_INDEX(INPUT0, b, f, z, y, x);
+#if !INPUT0_SIMPLE
+#   if INPUT0_DIMS <= 4
+                    input_idx = INPUT0_GET_INDEX(b, f, y, x);
+#   elif INPUT0_DIMS == 5
+                    input_idx = INPUT0_GET_INDEX(b, f, z, y, x);
+#   endif
                 mean += (float)input[input_idx];
              }
         }
-#else
+#elif INPUT0_SIMPLE
                 mean += (float)input[input_idx];
                 input_idx += INPUT0_X_PITCH;
             }
@@ -55,11 +57,8 @@ KERNEL (mvn_gpu_ref_within_channels)(const __global UNIT_TYPE* input, __global U
     }
     mean /= INPUT0_SIZE_X * INPUT0_SIZE_Y * INPUT0_SIZE_Z;
 
-#if INPUT0_LAYOUT_BFZYX_F16
-    uint output_idx;
-#else
     uint output_idx = OUTPUT_OFFSET + b * OUTPUT_BATCH_PITCH + f * OUTPUT_FEATURE_PITCH;
-#endif
+
 #if NORMALIZE_VARIANCE == 0
     //subtract mean
     input_idx = input_first;
@@ -69,14 +68,31 @@ KERNEL (mvn_gpu_ref_within_channels)(const __global UNIT_TYPE* input, __global U
         {
             for (uint x = 0; x < INPUT0_SIZE_X; x++)
             {
-#if INPUT0_LAYOUT_BFZYX_F16
-                input_idx = GET_DATA_BFZYX_F16_INDEX(INPUT0, b, f, z, y, x);
-                output_idx = GET_DATA_BFZYX_F16_INDEX(OUTPUT, b, f, z, y, x);
-                output[output_idx] = ACTIVATION(input[input_idx] - UNIT_CVT_FUNC(mean), ACTIVATION_PARAMS);
+#if !INPUT0_SIMPLE || !OUTPUT_SIMPLE
+#   if INPUT0_DIMS <= 4
+                input_idx = INPUT0_GET_INDEX(b, f, y, x);
+                output_idx = OUTPUT_GET_INDEX(b, f, y, x);
+#   elif INPUT0_DIMS == 5
+                input_idx = INPUT0_GET_INDEX(b, f, z, y, x);
+                output_idx = OUTPUT_GET_INDEX(b, f, z, y, x);
+#   endif
+                    ACTIVATION_TYPE result = TO_ACTIVATION_TYPE(input[input_idx]) - TO_ACTIVATION_TYPE(mean);
+#   if HAS_FUSED_OPS
+                    FUSED_OPS;
+                    output[output_idx] = FUSED_OPS_RESULT;
+#   else
+                    output[output_idx] = TO_OUTPUT_TYPE(ACTIVATION(result, ACTIVATION_PARAMS));
+#   endif
             }
         }
-#else
-                output[output_idx] = ACTIVATION(input[input_idx] - UNIT_CVT_FUNC(mean), ACTIVATION_PARAMS);
+#elif INPUT0_SIMPLE && OUTPUT_SIMPLE
+                    ACTIVATION_TYPE result = TO_ACTIVATION_TYPE(input[input_idx]) - TO_ACTIVATION_TYPE(mean);
+#   if HAS_FUSED_OPS
+                    FUSED_OPS;
+                    output[output_idx] = FUSED_OPS_RESULT;
+#   else
+                    output[output_idx] = TO_OUTPUT_TYPE(ACTIVATION(result, ACTIVATION_PARAMS));
+#   endif
                 input_idx += INPUT0_X_PITCH;
                 output_idx += OUTPUT_X_PITCH;
             }
@@ -98,13 +114,17 @@ KERNEL (mvn_gpu_ref_within_channels)(const __global UNIT_TYPE* input, __global U
         {
             for (uint x = 0; x < INPUT0_SIZE_X; x++)
             {
-#if INPUT0_LAYOUT_BFZYX_F16
-                input_idx = GET_DATA_BFZYX_F16_INDEX(INPUT0, b, f, z, y, x);
+#if !INPUT0_SIMPLE
+#   if INPUT0_DIMS <= 4
+                input_idx = INPUT0_GET_INDEX(b, f, y, x);
+#   elif INPUT0_DIMS == 5
+                input_idx = INPUT0_GET_INDEX(b, f, z, y, x);
+#   endif
                 float res = (float)input[input_idx] - mean;
                 variance = fma(res, res, variance);
             }
         }
-#else
+#elif INPUT0_SIMPLE
                 float res = (float)input[input_idx] - mean;
                 variance = fma(res, res, variance);
                 input_idx += INPUT0_X_PITCH;
@@ -126,14 +146,31 @@ KERNEL (mvn_gpu_ref_within_channels)(const __global UNIT_TYPE* input, __global U
         {
             for (uint x = 0; x < INPUT0_SIZE_X; x++)
             {
-#if INPUT0_LAYOUT_BFZYX_F16
-                input_idx = GET_DATA_BFZYX_F16_INDEX(INPUT0, b, f, z, y, x);
-                output_idx = GET_DATA_BFZYX_F16_INDEX(OUTPUT, b, f, z, y, x);
-                output[output_idx] = ACTIVATION((input[input_idx] - UNIT_CVT_FUNC(mean)) * UNIT_CVT_FUNC(variance), ACTIVATION_PARAMS);
+#if !INPUT0_SIMPLE || !OUTPUT_SIMPLE
+#   if INPUT0_DIMS <= 4
+                input_idx = INPUT0_GET_INDEX(b, f, y, x);
+                output_idx = OUTPUT_GET_INDEX(b, f, y, x);
+#   elif INPUT0_DIMS == 5
+                input_idx = INPUT0_GET_INDEX(b, f, z, y, x);
+                output_idx = OUTPUT_GET_INDEX(b, f, z, y, x);
+#   endif
+                    ACTIVATION_TYPE result = (TO_ACTIVATION_TYPE(input[input_idx]) - TO_ACTIVATION_TYPE(mean)) * TO_ACTIVATION_TYPE(variance);
+#   if HAS_FUSED_OPS
+                    FUSED_OPS;
+                    output[output_idx] = FUSED_OPS_RESULT;
+#   else
+                    output[output_idx] = TO_OUTPUT_TYPE(ACTIVATION(result, ACTIVATION_PARAMS));
+#   endif
             }
         }
-#else
-                output[output_idx] = ACTIVATION((input[input_idx] - UNIT_CVT_FUNC(mean)) * UNIT_CVT_FUNC(variance), ACTIVATION_PARAMS);
+#elif INPUT0_SIMPLE && OUTPUT_SIMPLE
+                    ACTIVATION_TYPE result = (TO_ACTIVATION_TYPE(input[input_idx]) - TO_ACTIVATION_TYPE(mean)) * TO_ACTIVATION_TYPE(variance);
+#   if HAS_FUSED_OPS
+                    FUSED_OPS;
+                    output[output_idx] = FUSED_OPS_RESULT;
+#   else
+                    output[output_idx] = TO_OUTPUT_TYPE(ACTIVATION(result, ACTIVATION_PARAMS));
+#   endif
                 input_idx += INPUT0_X_PITCH;
                 output_idx += OUTPUT_X_PITCH;
             }
@@ -144,8 +181,5 @@ KERNEL (mvn_gpu_ref_within_channels)(const __global UNIT_TYPE* input, __global U
         output_idx += OUTPUT_Z_PITCH - INPUT0_SIZE_Y*OUTPUT_Y_PITCH;
 #endif
     }
-#endif
+#endif //NORMALIZE_VARIANCE
 }
-
-
-#undef UNIT_CVT_FUNC

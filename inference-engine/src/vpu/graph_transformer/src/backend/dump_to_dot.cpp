@@ -1,8 +1,6 @@
-// Copyright (C) 2018-2019 Intel Corporation
+// Copyright (C) 2018-2020 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
-
-#ifndef NDEBUG
 
 #include <vpu/backend/backend.hpp>
 
@@ -39,6 +37,7 @@
 #include <vpu/utils/file_system.hpp>
 #include <vpu/utils/numeric.hpp>
 #include <vpu/utils/profiling.hpp>
+#include <vpu/utils/ie_helpers.hpp>
 
 namespace vpu {
 
@@ -89,7 +88,7 @@ void dumpStageToDot(DotSerializer& out, const Stage& stage, int stageExecIdx) {
 }  // namespace
 
 void BackEnd::dumpModelToDot(
-        const Model::Ptr& model,
+        const Model& model,
         const std::string& fileName) {
     VPU_PROFILE(dumpModelToDot);
 
@@ -100,7 +99,7 @@ void BackEnd::dumpModelToDot(
 
     DotSerializer out(file);
 
-    out.append("digraph ie_vpu_graph {");
+    out.append("digraph ie_vpu_model_view {");
     {
         VPU_DOT_IDENT(out);
 
@@ -201,8 +200,8 @@ void BackEnd::dumpModelToDot(
                 dumpStageToDot(out, stage, stageExecIdx);
             }
 
-            for (const auto& injectedStageEdge : stage->injectedStageEdges()) {
-                dumpStageToDot(out, injectedStageEdge->child(), stageExecIdx);
+            if (const auto injectedStage = stage->injectedStage()) {
+                dumpStageToDot(out, injectedStage, stageExecIdx);
             }
 
             if (stage->category() != StageCategory::Special) {
@@ -220,10 +219,6 @@ void BackEnd::dumpModelToDot(
                 {
                     VPU_DOT_IDENT(out);
 
-                    if (inEdge->childEdge() != nullptr) {
-                        out.append("style=dotted");
-                    }
-
                     DotLabel lbl("StageInput", out);
                     lbl.appendPair("portInd", inEdge->portInd());
                     if (!inEdge->attrs().empty()) {
@@ -237,10 +232,6 @@ void BackEnd::dumpModelToDot(
                 out.append("%s -> %s [", stageDotName(stage), dataDotName(outEdge->output()));
                 {
                     VPU_DOT_IDENT(out);
-
-                    if (outEdge->childEdge() != nullptr) {
-                        out.append("style=dotted");
-                    }
 
                     DotLabel lbl("StageOutput", out);
                     lbl.appendPair("portInd", outEdge->portInd());
@@ -256,10 +247,6 @@ void BackEnd::dumpModelToDot(
                 {
                     VPU_DOT_IDENT(out);
 
-                    if (tempBufferEdge->childEdge() != nullptr) {
-                        out.append("style=dotted");
-                    }
-
                     DotLabel lbl("Temp buffer", out);
                     lbl.appendPair("portInd", tempBufferEdge->portInd());
                     if (!tempBufferEdge->attrs().empty()) {
@@ -269,13 +256,13 @@ void BackEnd::dumpModelToDot(
                 out.append("];");
             }
 
-            for (const auto& injectedStageEdge : stage->injectedStageEdges()) {
-                auto injectedStage = injectedStageEdge->child();
-
+            if (const auto injectedStage = stage->injectedStage()) {
                 for (const auto& inEdge : injectedStage->inputEdges()) {
                     out.append("%s -> %s [", dataDotName(inEdge->input()), stageDotName(injectedStage));
                     {
                         VPU_DOT_IDENT(out);
+
+                        out.append("style=dotted");
 
                         DotLabel lbl("StageInput", out);
                         lbl.appendPair("portInd", inEdge->portInd());
@@ -291,6 +278,8 @@ void BackEnd::dumpModelToDot(
                     {
                         VPU_DOT_IDENT(out);
 
+                        out.append("style=dotted");
+
                         DotLabel lbl("StageOutput", out);
                         lbl.appendPair("portInd", outEdge->portInd());
                         if (!outEdge->attrs().empty()) {
@@ -304,6 +293,8 @@ void BackEnd::dumpModelToDot(
                     out.append("%s -> %s [", dataDotName(tempBufferEdge->tempBuffer()), stageDotName(injectedStage));
                     {
                         VPU_DOT_IDENT(out);
+
+                        out.append("style=dotted");
 
                         DotLabel lbl("Temp buffer", out);
                         lbl.appendPair("portInd", tempBufferEdge->portInd());
@@ -344,34 +335,26 @@ void BackEnd::dumpModelToDot(
         //
 
         for (const auto& stage : model->getStages()) {
-            for (const auto& injectedStageEdge : stage->injectedStageEdges()) {
-                out.append("%s -> %s [", stageDotName(stage), stageDotName(injectedStageEdge->child()));
+            if (const auto injectionEdge = stage->injectedStageEdge()) {
+                out.append("%s -> %s [", stageDotName(stage), stageDotName(injectionEdge->child()));
                 {
                     VPU_DOT_IDENT(out);
 
-                    out.append("style=dotted");
+                    out.append("style=dashed");
 
                     DotLabel lbl("Injected Stage", out);
-                    lbl.appendPair("portInd", injectedStageEdge->portInd());
-                    if (!injectedStageEdge->attrs().empty()) {
-                        lbl.appendPair("extraAttrs", injectedStageEdge->attrs());
+                    if (!injectionEdge->attrs().empty()) {
+                        lbl.appendPair("extraAttrs", injectionEdge->attrs());
                     }
                 }
                 out.append("];");
-            }
 
-            if (stage->numInjectedStages() > 0) {
                 out.append("{");
                 {
                     VPU_DOT_IDENT(out);
 
                     out.append("rank=same;");
-
-                    out.append("%s", stageDotName(stage));
-
-                    for (const auto& injectedStageEdge : stage->injectedStageEdges()) {
-                        out.append(", %s", stageDotName(injectedStageEdge->child()));
-                    }
+                    out.append("%s, %s", stageDotName(stage), stageDotName(injectionEdge->child()));
                 }
                 out.append("}");
             }
@@ -381,5 +364,3 @@ void BackEnd::dumpModelToDot(
 }
 
 }  // namespace vpu
-
-#endif

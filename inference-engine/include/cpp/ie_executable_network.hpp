@@ -1,24 +1,26 @@
-// Copyright (C) 2018-2019 Intel Corporation
+// Copyright (C) 2018-2020 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
 /**
  * @brief A header file that provides wrapper classes for IExecutableNetwork
+ * 
  * @file ie_executable_network.hpp
  */
 #pragma once
 
+#include <algorithm>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
-#include <memory>
-#include <algorithm>
-#include "ie_iexecutable_network.hpp"
-#include "ie_plugin_ptr.hpp"
+
+#include "cpp/ie_cnn_network.h"
 #include "cpp/ie_infer_request.hpp"
 #include "cpp/ie_memory_state.hpp"
-#include "cpp/ie_cnn_network.h"
 #include "details/ie_exception_conversion.hpp"
+#include "ie_iexecutable_network.hpp"
+#include "ie_plugin_ptr.hpp"
 
 namespace InferenceEngine {
 
@@ -44,15 +46,21 @@ public:
 
     /**
      * @brief Constructs ExecutableNetwork from the initialized shared_pointer
+     *
      * @param actual Initialized shared pointer
      * @param plg Plugin to use
      */
     explicit ExecutableNetwork(IExecutableNetwork::Ptr actual, InferenceEnginePluginPtr plg = {})
-    : actual(actual), plg(plg) {}
+        : actual(actual), plg(plg) {
+        //  plg can be null, but not the actual
+        if (actual == nullptr) {
+            THROW_IE_EXCEPTION << "ExecutableNetwork wrapper was not initialized.";
+        }
+    }
 
     /**
      * @copybrief IExecutableNetwork::GetOutputsInfo
-     * 
+     *
      * Wraps IExecutableNetwork::GetOutputsInfo.
      * @return A collection that contains string as key, and const Data smart pointer as value
      */
@@ -64,7 +72,7 @@ public:
 
     /**
      * @copybrief IExecutableNetwork::GetInputsInfo
-     * 
+     *
      * Wraps IExecutableNetwork::GetInputsInfo
      * @return A collection that contains string as key, and const InputInfo smart pointer as value
      */
@@ -76,17 +84,23 @@ public:
 
     /**
      * @brief reset owned object to new pointer.
-     * 
+     *
      * Eessential for cases when simultaneously loaded networks not expected.
      * @param newActual actual pointed object
      */
     void reset(IExecutableNetwork::Ptr newActual) {
+        if (actual == nullptr) {
+            THROW_IE_EXCEPTION << "ExecutableNetwork wrapper was not initialized.";
+        }
+        if (newActual == nullptr) {
+            THROW_IE_EXCEPTION << "ExecutableNetwork wrapper used for reset was not initialized.";
+        }
         this->actual.swap(newActual);
     }
 
     /**
      * @copybrief IExecutableNetwork::CreateInferRequest
-     * 
+     *
      * Wraps IExecutableNetwork::CreateInferRequest.
      * @return InferRequest object
      */
@@ -99,7 +113,7 @@ public:
 
     /**
      * @copybrief IExecutableNetwork::CreateInferRequest
-     * 
+     *
      * Wraps IExecutableNetwork::CreateInferRequest.
      * @return shared pointer on InferenceEngine::InferRequest object
      */
@@ -110,43 +124,61 @@ public:
     }
 
     /**
-    * @copybrief IExecutableNetwork::Export
-    * 
-    * Wraps IExecutableNetwork::Export.
-    * 
-    * @see Core::ImportNetwork
-    * @see InferencePlugin::ImportNetwork
-    * 
-    * @param modelFileName Full path to the location of the exported file
-    */
-    void Export(const std::string &modelFileName) {
+     * @copybrief IExecutableNetwork::Export
+     *
+     * Wraps IExecutableNetwork::Export.
+     *
+     * @see Core::ImportNetwork
+     * @see InferencePlugin::ImportNetwork
+     *
+     * @param modelFileName Full path to the location of the exported file
+     */
+    void Export(const std::string& modelFileName) {
         CALL_STATUS_FNC(Export, modelFileName);
     }
 
     /**
-    * @copybrief IExecutableNetwork::GetMappedTopology
-    * 
-    * Wraps IExecutableNetwork::GetMappedTopology.
-    * @param deployedTopology Map of PrimitiveInfo objects that represent the deployed topology
-    */
-    void GetMappedTopology(std::map<std::string, std::vector<PrimitiveInfo::Ptr>> &deployedTopology) {
-        CALL_STATUS_FNC(GetMappedTopology, deployedTopology);
+     * @copybrief IExecutableNetwork::Export
+     *
+     * Wraps IExecutableNetwork::Export.
+     *
+     * @see Core::ImportNetwork
+     * @see InferencePlugin::ImportNetwork
+     *
+     * @param networkModel network model output stream
+     */
+    void Export(std::ostream& networkModel) {
+        CALL_STATUS_FNC(Export, networkModel);
     }
 
     /**
-    * cast operator is used when this wrapper initialized by LoadNetwork
-    * @return
-    */
-    operator IExecutableNetwork::Ptr &() {
+     * @deprecated Use ExecutableNetwork::GetExecGraphInfo to get information about an internal graph.
+     * @copybrief IExecutableNetwork::GetMappedTopology
+     *
+     * Wraps IExecutableNetwork::GetMappedTopology.
+     * @param deployedTopology Map of PrimitiveInfo objects that represent the deployed topology
+     */
+    IE_SUPPRESS_DEPRECATED_START
+    INFERENCE_ENGINE_DEPRECATED("Use ExecutableNetwork::GetExecGraphInfo to get information about an internal graph")
+    void GetMappedTopology(std::map<std::string, std::vector<PrimitiveInfo::Ptr>>& deployedTopology) {
+        CALL_STATUS_FNC(GetMappedTopology, deployedTopology);
+    }
+    IE_SUPPRESS_DEPRECATED_END
+
+    /**
+     * @brief cast operator is used when this wrapper initialized by LoadNetwork
+     * @return A shared pointer to IExecutableNetwork interface. 
+     */
+    operator IExecutableNetwork::Ptr&() {
         return actual;
     }
 
     /**
-    * @copybrief IExecutableNetwork::GetExecGraphInfo
-    * 
-    * Wraps IExecutableNetwork::GetExecGraphInfo.
-    * @return CNNetwork containing Executable Graph Info
-    */
+     * @copybrief IExecutableNetwork::GetExecGraphInfo
+     *
+     * Wraps IExecutableNetwork::GetExecGraphInfo.
+     * @return CNNetwork containing Executable Graph Info
+     */
     CNNNetwork GetExecGraphInfo() {
         ICNNNetwork::Ptr ptr = nullptr;
         CALL_STATUS_FNC(GetExecGraphInfo, ptr);
@@ -155,11 +187,14 @@ public:
 
     /**
      * @copybrief IExecutableNetwork::QueryState
-     * 
+     *
      * Wraps IExecutableNetwork::QueryState
      * @return A vector of Memory State objects
      */
     std::vector<MemoryState> QueryState() {
+        if (actual == nullptr) {
+            THROW_IE_EXCEPTION << "ExecutableNetwork wrapper was not initialized.";
+        }
         IMemoryState::Ptr pState = nullptr;
         auto res = OK;
         std::vector<MemoryState> controller;
@@ -179,21 +214,22 @@ public:
 
     /**
      * @copybrief IExecutableNetwork::SetConfig
-     * 
+     *
      * Wraps IExecutableNetwork::SetConfig.
      * @param config Map of pairs: (config parameter name, config parameter value)
      */
-    void SetConfig(const std::map<std::string, Parameter> &config) {
+    void SetConfig(const std::map<std::string, Parameter>& config) {
         CALL_STATUS_FNC(SetConfig, config);
     }
 
-    /** @copybrief IExecutableNetwork::GetConfig
-     * 
+    /**
+     * @copybrief IExecutableNetwork::GetConfig
+     *
      * Wraps IExecutableNetwork::GetConfig
      * @param name - config key, can be found in ie_plugin_config.hpp
      * @return Configuration paramater value
      */
-    Parameter GetConfig(const std::string &name) const {
+    Parameter GetConfig(const std::string& name) const {
         Parameter configValue;
         CALL_STATUS_FNC(GetConfig, name, configValue);
         return configValue;
@@ -201,15 +237,26 @@ public:
 
     /**
      * @copybrief IExecutableNetwork::GetMetric
-     * 
+     *
      * Wraps IExecutableNetwork::GetMetric
      * @param name  - metric name to request
      * @return Metric paramater value
      */
-    Parameter GetMetric(const std::string &name) const {
+    Parameter GetMetric(const std::string& name) const {
         Parameter metricValue;
         CALL_STATUS_FNC(GetMetric, name, metricValue);
         return metricValue;
+    }
+
+    /**
+     * @brief Returns pointer to plugin-specific shared context
+     * on remote accelerator device that was used to create this ExecutableNetwork
+     * @return A context
+     */
+    RemoteContext::Ptr GetContext() const {
+        RemoteContext::Ptr pContext;
+        CALL_STATUS_FNC(GetContext, pContext);
+        return pContext;
     }
 
     /**

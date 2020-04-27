@@ -1,5 +1,5 @@
 """
- Copyright (c) 2018-2019 Intel Corporation
+ Copyright (C) 2018-2020 Intel Corporation
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -14,25 +14,22 @@
  limitations under the License.
 """
 
-import networkx as nx
-
-from mo.front.common.partial_infer.elemental import copy_shape_infer
 from mo.graph.graph import Graph
 from mo.ops.op import Op
 
 
 class ShuffleChannelOp(Op):
-    """
-    Op for ShuffleChannel layer. It will be replaced by ShuffleChannel MiddleReplacer.
-    """
     op = 'ShuffleChannel'
-    enabled = True
+    enabled = False
 
     def __init__(self, graph: Graph, attrs: dict):
         super().__init__(graph, {
+            'op': self.op,
             'type': None,
-            'op': __class__.op,
+
+            # operation should be resolved on the front phase, partial inference is not needed
+            'infer': None,
+
             'in_ports_count': 1,
             'out_ports_count': 1,
-            'infer': copy_shape_infer
         }, attrs)

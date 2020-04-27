@@ -1,4 +1,4 @@
-﻿// Copyright (c) 2019 Intel Corporation
+﻿// Copyright (c) 2019-2020 Intel Corporation
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -58,7 +58,7 @@ BinaryConvolutionKernelBase::DispatchData BinaryConvolutionKernelRef::SetDefault
     kd.lws1 = 1;
     kd.lws2 = 1;
 
-    kd.effiency = DONT_USE_IF_HAVE_SOMETHING_ELSE;
+    kd.efficiency = DONT_USE_IF_HAVE_SOMETHING_ELSE;
 
     return kd;
 }
@@ -100,7 +100,8 @@ JitConstants BinaryConvolutionKernelRef::GetFusedPrimitivesJitConstants(const bi
                                                                         const DispatchData& /*kd*/) const {
     JitConstants jit = {};
 
-    FusedOpsConfiguration conf = {"", {"b", "f", "y", "x"}, "res", 1, false, false, true, false };
+    auto input_dt = GetUnitType(params);
+    FusedOpsConfiguration conf = {"", {"b", "f", "y", "x"}, "res", input_dt, 1 };
     jit.Merge(MakeFusedOpsJitConstants(params, {conf}));
 
     return jit;

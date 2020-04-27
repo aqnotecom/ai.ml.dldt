@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2019 Intel Corporation
+// Copyright (C) 2018-2020 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -11,15 +11,17 @@ using namespace mkldnn;
 using namespace MKLDNNPlugin;
 using namespace InferenceEngine;
 
+std::mutex MKLDNNMemoryNodeVirtualEdge::holderMutex;
+
 MKLDNNMemoryOutputNode::MKLDNNMemoryOutputNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng, int socket)
         : MKLDNNNode(layer, eng, socket) , MKLDNNMemoryNode(layer) {
     if (created()) {
-        MKLDNNMemoryNodeVirtualEdge::registerOutput(this);
+        holder = MKLDNNMemoryNodeVirtualEdge::registerOutput(this);
     }
 }
 
 MKLDNNMemoryOutputNode::~MKLDNNMemoryOutputNode() {
-    MKLDNNMemoryNodeVirtualEdge::remove(this);
+    MKLDNNMemoryNodeVirtualEdge::remove(this, holder);
 }
 
 void MKLDNNMemoryOutputNode::getSupportedDescriptors() {}
@@ -60,37 +62,63 @@ void MKLDNNMemoryOutputNode::execute(mkldnn::stream strm)  {
     memcpy(dst_ptr, src_ptr, srcMemory.GetSize());
 }
 
+#if defined (COMPILED_CPU_MKLDNN_INPUT_NODE)
 MKLDNNMemoryInputNode::MKLDNNMemoryInputNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng, int socket)
         : MKLDNNInputNode(layer, eng, socket), MKLDNNMemoryNode(layer) {
     if (created()) {
-        MKLDNNMemoryNodeVirtualEdge::registerInput(this);
+        holder = MKLDNNMemoryNodeVirtualEdge::registerInput(this);
     }
 }
 
 MKLDNNMemoryInputNode::~MKLDNNMemoryInputNode() {
-    MKLDNNMemoryNodeVirtualEdge::remove(this);
+    MKLDNNMemoryNodeVirtualEdge::remove(this, holder);
 }
 
-void MKLDNNMemoryNodeVirtualEdge::registerInput(MKLDNNMemoryInputNode * node) {
+MKLDNNMemoryNodeVirtualEdge::Holder* MKLDNNMemoryNodeVirtualEdge::registerInput(MKLDNNMemoryInputNode * node) {
+    std::lock_guard<std::mutex> lock{MKLDNNMemoryNodeVirtualEdge::holderMutex};
     // in case of output already registered
-    auto sibling = MKLDNNMemoryNodeVirtualEdge::getByName(node->getId());
+    auto& holder = MKLDNNMemoryNodeVirtualEdge::getExisted();
+    auto sibling = MKLDNNMemoryNodeVirtualEdge::getByName(holder, node->getId());
     if (sibling != nullptr) {
         auto outputNode = dynamic_cast<MKLDNNMemoryOutputNode*>(sibling);
         IE_ASSERT(outputNode != nullptr);
         outputNode->setInputNode(node);
     } else {
-        getExisted()[node->getId()] = node;
+        holder[node->getId()] = node;
     }
+    return &holder;
 }
+#endif
 
-void MKLDNNMemoryNodeVirtualEdge::registerOutput(MKLDNNMemoryOutputNode * node) {
+MKLDNNMemoryNodeVirtualEdge::Holder* MKLDNNMemoryNodeVirtualEdge::registerOutput(MKLDNNMemoryOutputNode * node) {
+    std::lock_guard<std::mutex> lock{MKLDNNMemoryNodeVirtualEdge::holderMutex};
     // in case of output layer
-    auto sibling = MKLDNNMemoryNodeVirtualEdge::getByName(node->getId());
+    auto& holder = MKLDNNMemoryNodeVirtualEdge::getExisted();
+    auto sibling = MKLDNNMemoryNodeVirtualEdge::getByName(holder, node->getId());
     if (sibling != nullptr) {
+#if defined (COMPILED_CPU_MKLDNN_INPUT_NODE)
         auto inputNode = dynamic_cast<MKLDNNMemoryInputNode*>(sibling);
         IE_ASSERT(inputNode != nullptr);
         node->setInputNode(inputNode);
+#else
+        THROW_IE_EXCEPTION << "CPU Plugin doesn't contain Input layer!";
+#endif
     } else {
-        getExisted()[node->getId()] = node;
+        holder[node->getId()] = node;
+    }
+    return &holder;
+}
+
+void MKLDNNMemoryNodeVirtualEdge::remove(MKLDNNMemoryNode * node, Holder* holder) {
+    std::lock_guard<std::mutex> lock{MKLDNNMemoryNodeVirtualEdge::holderMutex};
+    if (nullptr != holder) {
+        InferenceEngine::details::erase_if(*holder, [&](const Holder::value_type & it){
+            return it.second == node;
+        });
     }
 }
+
+#if defined (COMPILED_CPU_MKLDNN_INPUT_NODE)
+REG_MKLDNN_PRIM_FOR(MKLDNNMemoryInputNode, MemoryInput);
+#endif
+REG_MKLDNN_PRIM_FOR(MKLDNNMemoryOutputNode, MemoryOutput);
