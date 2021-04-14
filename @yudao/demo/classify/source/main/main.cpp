@@ -8,21 +8,24 @@
  * @example classification_sample_async/main.cpp
  */
 
-#include <format_reader_ptr.h>
-#include <misc/classification_results.h>
-#include <sys/stat.h>
-
-#include <condition_variable>
 #include <fstream>
-#include <inference_engine.hpp>
-#include <map>
+#include <vector>
 #include <memory>
-#include <misc/args_helper.hpp>
+#include <string>
+#include <map>
+#include <condition_variable>
+#include <mutex>
+
+#include <inference_engine.hpp>
+
+#include <format_reader_ptr.h>
+
 #include <misc/common.hpp>
 #include <misc/slog.hpp>
-#include <mutex>
-#include <string>
-#include <vector>
+#include <misc/args_helper.hpp>
+#include <misc/classification_results.h>
+
+#include <sys/stat.h>
 
 #include "classify.h"
 
@@ -171,7 +174,7 @@ int main(int argc, char* argv[]) {
         }
 
         // --------------------------- 7. Do inference ---------------------------------------------------------
-        size_t numIterations = 10;
+        size_t numIterations = 100;
         size_t curIteration = 0;
         std::condition_variable condVar;
 

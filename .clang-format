@@ -1,6 +1,9 @@
 BasedOnStyle: Google
 IndentWidth: 4
 UseTab: Never
+# 排序#include，设置为 false
+SortIncludes: false
+
 ---
 Language: Cpp
 Standard: Cpp11
@@ -16,4 +19,5 @@ FixNamespaceComments: true
 IndentCaseLabels: false
 SpaceBeforeCpp11BracedList: true
 SpaceBeforeCtorInitializerColon: false
+
 ---

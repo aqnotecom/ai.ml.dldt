@@ -163,7 +163,6 @@ function(add_project_to_build)
             # check if a subdirectory contains CMakeLists.txt. In this case we can build it.
             file(GLOB is_project_dir "${CMAKE_CURRENT_SOURCE_DIR}/${dir}/CMakeLists.txt")
             if(is_project_dir)
-                # Include subdirectory to the project.
                 add_subdirectory(${dir})
             endif()
         endif()
