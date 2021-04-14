@@ -22,7 +22,7 @@ error() {
         echo "Error on or near line $1; exiting with status ${code}"
     fi
     exit "${code}"
-} 
+}
 trap 'error ${LINENO}' ERR
 
 
@@ -52,6 +52,8 @@ if [[ -f /etc/centos-release ]]; then
     DISTRO="centos"
 elif [[ -f /etc/lsb-release ]]; then
     DISTRO="ubuntu"
+elif [[ -f /etc/os-release && "$(lsb_release -i -s)" == "Debian" ]]; then
+    DISTRO="debian"
 fi
 
 if [[ $DISTRO == "centos" ]]; then

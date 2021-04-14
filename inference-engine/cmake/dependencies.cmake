@@ -233,6 +233,8 @@ if (ENABLE_OPENCV)
                 set(OPENCV_SUFFIX "ubuntu18")
             elseif (${LINUX_OS_NAME} STREQUAL "Ubuntu 20.04")
                 set(OPENCV_SUFFIX "ubuntu20")
+            elseif (${LINUX_OS_NAME} STREQUAL "Debian 10")
+                set(OPENCV_SUFFIX "ubuntu18") # equals
             else()
                 message(FATAL_ERROR "OpenCV is not available on current platform")
             endif()
