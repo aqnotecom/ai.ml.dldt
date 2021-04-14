@@ -1,0 +1,39 @@
+# NCHW (right)
+
+Top 10 results:
+
+Image /home/aqnote/org.openvino/openvino/@yudao/demo/classify/car.png
+
+classid probability label
+------- ----------- -----
+817     0.6708984   sports car, sport car
+479     0.1922607   car wheel
+511     0.0936890   convertible
+436     0.0216064   beach wagon, station wagon, wagon, estate car, beach waggon, station waggon, waggon
+751     0.0075760   racer, race car, racing car
+656     0.0049667   minivan
+717     0.0027428   pickup, pickup truck
+581     0.0019779   grille, radiator grille
+468     0.0014219   cab, hack, taxi, taxicab
+661     0.0008636   Model T
+
+
+# NHWC (wrong)
+
+Top 10 results:
+
+Image /home/aqnote/org.openvino/openvino/@yudao/demo/classify/car.png
+
+classid probability label
+------- ----------- -----
+864     0.5400391   tow truck, tow car, wrecker
+717     0.2846680   pickup, pickup truck
+555     0.0410156   fire engine, fire truck
+621     0.0404053   lawn mower, mower
+704     0.0256805   parking meter
+609     0.0173798   jeep, landrover
+468     0.0119324   cab, hack, taxi, taxicab
+751     0.0070190   racer, race car, racing car
+759     0.0061951   reflex camera
+867     0.0045395   trailer truck, tractor trailer, trucking rig, rig, articulated lorry, semi
+
